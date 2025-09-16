@@ -70,7 +70,7 @@ async def freshdesk_webhook(request: Request):
     system_prompt = (
         "You are a customer support assistant. "
         "Return only valid JSON with keys: "
-        "intent (one word), confidence (0-1), summary (2-3 lines in Hindi), "
+        "intent (one word), confidence (0-1), summary (2-3 lines in English), "
         "sentiment (Angry/Neutral/Positive), reply_draft (friendly Hindi reply), "
         "kb_suggestions (list of short titles or URLs)."
     )
@@ -112,7 +112,7 @@ Return only a valid JSON object. Example:
 
 **Sentiment:** {parsed.get('sentiment')}
 
-**Summary (Hindi):**
+**Summary (English):**
 {parsed.get('summary')}
 
 **Draft Reply (agent can edit & send):**
@@ -131,3 +131,4 @@ _Note: AI-generated draft — please review before sending._
         return {"ok": False, "error": str(e)}
 
     return {"ok": True, "ticket": ticket_id, "ai": parsed}
+
