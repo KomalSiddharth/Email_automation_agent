@@ -69,10 +69,15 @@ async def freshdesk_webhook(request: Request):
     # AI Prompt
     system_prompt = (
         "You are a customer support assistant. "
+        "Always respond in **English only**. "
         "Return only valid JSON with keys: "
-        "intent (one word), confidence (0-1), summary (2-3 lines in English only ), "
-        "sentiment (Angry/Neutral/Positive), reply_draft (friendly English reply, never Hindi or other languages), "
-        "kb_suggestions (list of short titles or URLs,all in English)."
+        "intent (one word), confidence (0-1), summary (2-3 lines in English), "
+        "sentiment (Angry/Neutral/Positive), reply_draft (polite English email reply using the template below), "
+        "kb_suggestions (list of short titles or URLs, all in English). "
+        "Template for reply_draft:\n"
+        "Dear [CustomerName],\n\n"
+        "[AI generated helpful and polite reply body]\n\n"
+        "Best regards,\nSupport Team"
     )
 
     user_prompt = f"""
@@ -104,6 +109,9 @@ Return only a valid JSON object. Example:
             "kb_suggestions": []
         }
 
+    # High priority handling → Payment-related tickets
+    is_payment_issue = parsed.get("intent", "").upper() in ["BILLING", "PAYMENT"]
+
     # Build AI Note
     note = f"""**🤖 AI Assist (draft)**
 
@@ -121,7 +129,7 @@ Return only a valid JSON object. Example:
 **KB Suggestions:**
 {json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
 
-_Note: AI-generated draft — please review before sending._
+{"⚠️ High Priority: Payment-related issue. This draft is private. Please review and send manually." if is_payment_issue else "_Note: AI-generated draft — please review before sending._"}
 """
     try:
         res = post_freshdesk_note(ticket_id, note, private=True)
@@ -130,7 +138,4 @@ _Note: AI-generated draft — please review before sending._
         logging.exception("❌ Failed to post note to Freshdesk: %s", e)
         return {"ok": False, "error": str(e)}
 
-    return {"ok": True, "ticket": ticket_id, "ai": parsed}
-
-
-
+    return {"ok": True, "ticket": ticket_id, "ai": parsed, "priority": "HIGH" if is_payment_issue else "NORMAL"}
