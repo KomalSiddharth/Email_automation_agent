@@ -92,19 +92,23 @@ def root():
 
 @app.post("/freshdesk-webhook")
 async def freshdesk_webhook(request: Request):
-    payload = await request.json()
-    logging.info("📩 Incoming Freshdesk payload: %s", payload)
+    try:
+        payload = await request.json()
+        logging.info("📩 Incoming Freshdesk payload: %s", payload)
+    except Exception as e:
+        logging.exception("❌ Failed to parse JSON payload: %s", e)
+        return {"ok": False, "error": "invalid JSON"}
 
     # -----------------------------
-    # Extract ticket object safely
+    # Safely extract ticket object
     # -----------------------------
-    ticket = payload.get("ticket") or payload  # fallback to payload if no "ticket" key
+    ticket = payload.get("ticket") or payload
     ticket_id = ticket.get("id") or payload.get("id")
     subject = ticket.get("subject", "")
     description = ticket.get("description", "")
 
     # -----------------------------
-    # Correct requester email extraction
+    # Safely extract requester email
     # -----------------------------
     requester_email = (
         ticket.get("requester", {}).get("email") or
@@ -112,24 +116,36 @@ async def freshdesk_webhook(request: Request):
         payload.get("email") or
         ""
     )
-    logging.info("🔹 Extracted requester_email: %s", requester_email)
 
-    if not ticket_id:
-        logging.error("❌ Ticket id not found in payload: %s", payload)
-        return {"ok": False, "error": "ticket id not found"}
-    if not requester_email:
-    logging.warning("⚠️ Requester email missing in payload: %s", payload)
+    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
+
     # -----------------------------
-    # Only process specific test email
+    # Validate required fields
+    # -----------------------------
+    if not ticket_id:
+        logging.error("❌ Ticket id missing in payload")
+        return {"ok": False, "error": "ticket id not found"}
+
+    if not requester_email:
+        logging.warning("⚠️ Requester email missing, skipping auto-reply")
+        return {"ok": True, "skipped": True, "reason": "missing requester_email"}
+
+    # -----------------------------
+    # Only process test email
     # -----------------------------
     if requester_email.lower() != TEST_EMAIL.lower():
         logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
         return {"ok": True, "skipped": True}
 
     # -----------------------------
-    # Check merged ticket → always post to master
+    # Get master ticket ID if merged
     # -----------------------------
-    master_id = get_master_ticket_id(ticket_id)
+    try:
+        master_id = get_master_ticket_id(ticket_id)
+        logging.info("🔀 Master ticket id: %s", master_id)
+    except Exception as e:
+        logging.exception("❌ Failed to get master ticket id: %s", e)
+        master_id = ticket_id
 
     # -----------------------------
     # AI classification
@@ -144,6 +160,7 @@ async def freshdesk_webhook(request: Request):
         "[Helpful AI reply]\n\n"
         "Best regards,\nSupport Team"
     )
+
     user_prompt = f"""
 Ticket subject:
 {subject}
@@ -153,7 +170,6 @@ Ticket body:
 
 Return valid JSON only.
 """
-
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
         assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
@@ -214,6 +230,9 @@ Return valid JSON only.
     else:
         logging.info("ℹ️ Auto-reply skipped (intent/setting)")
 
+    # -----------------------------
+    # Return response
+    # -----------------------------
     return {
         "ok": True,
         "ticket": ticket_id,
@@ -223,4 +242,3 @@ Return valid JSON only.
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
-
