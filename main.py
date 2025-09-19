@@ -5,18 +5,11 @@ import requests
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 
-# Load .env locally
+# --------------------------
+# Load Environment Variables
+# --------------------------
 load_dotenv()
 
-# --------------------------
-# App + Logging Setup
-# --------------------------
-app = FastAPI()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
-# --------------------------
-# Env Variables
-# --------------------------
 FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
 FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -26,16 +19,25 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "false").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
-TEST_EMAIL = "komalsiddharth814@gmail.com"  # ✅ Only this email is processed
+TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
 
 # --------------------------
-# Helpers
+# App & Logging
 # --------------------------
-def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperature=0.0):
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+app = FastAPI()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+# --------------------------
+# Helper Functions
+# --------------------------
+def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperature=0.0) -> dict:
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
     payload = {
         "model": OPENAI_MODEL,
         "messages": [
@@ -45,17 +47,19 @@ def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperatur
         "temperature": temperature,
         "max_tokens": max_tokens
     }
-    r = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    response = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=30)
+    response.raise_for_status()
+    return response.json()
 
-def get_freshdesk_ticket(ticket_id: int):
+
+def get_freshdesk_ticket(ticket_id: int) -> dict | None:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
     resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
     if resp.status_code != 200:
         logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
         return None
     return resp.json()
+
 
 def get_master_ticket_id(ticket_id: int) -> int:
     ticket = get_freshdesk_ticket(ticket_id)
@@ -67,21 +71,20 @@ def get_master_ticket_id(ticket_id: int) -> int:
         return parent_id
     return ticket_id
 
-def post_freshdesk_note(ticket_id: int, body: str, private: bool = True):
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
-    auth = (FRESHDESK_API_KEY, "X")
-    payload = {"body": body, "private": private}
-    r = requests.post(url, auth=auth, json=payload, timeout=20)
-    r.raise_for_status()
-    return r.json()
 
-def post_freshdesk_reply(ticket_id: int, body: str):
+def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
+    resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/reply"
-    auth = (FRESHDESK_API_KEY, "X")
-    payload = {"body": body}
-    r = requests.post(url, auth=auth, json=payload, timeout=20)
-    r.raise_for_status()
-    return r.json()
+    resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body}, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
 
 # --------------------------
 # Routes
@@ -89,6 +92,7 @@ def post_freshdesk_reply(ticket_id: int, body: str):
 @app.get("/")
 def root():
     return {"message": "AI Email Automation Backend Running"}
+
 
 @app.post("/freshdesk-webhook")
 async def freshdesk_webhook(request: Request):
@@ -99,29 +103,21 @@ async def freshdesk_webhook(request: Request):
         logging.exception("❌ Failed to parse JSON payload: %s", e)
         return {"ok": False, "error": "invalid JSON"}
 
-    # -----------------------------
-    # Safely extract ticket object
-    # -----------------------------
+    # Extract ticket details safely
     ticket = payload.get("ticket") or payload
     ticket_id = ticket.get("id") or payload.get("id")
     subject = ticket.get("subject", "")
     description = ticket.get("description", "")
 
-    # -----------------------------
-    # Safely extract requester email
-    # -----------------------------
+    # Extract requester email
     requester_email = (
         ticket.get("requester", {}).get("email") or
         ticket.get("contact", {}).get("email") or
         payload.get("email") or
         ""
     )
-
     logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
 
-    # -----------------------------
-    # Validate required fields
-    # -----------------------------
     if not ticket_id:
         logging.error("❌ Ticket id missing in payload")
         return {"ok": False, "error": "ticket id not found"}
@@ -130,16 +126,11 @@ async def freshdesk_webhook(request: Request):
         logging.warning("⚠️ Requester email missing, skipping auto-reply")
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
-    # -----------------------------
-    # Only process test email
-    # -----------------------------
     if requester_email.lower() != TEST_EMAIL.lower():
         logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
         return {"ok": True, "skipped": True}
 
-    # -----------------------------
-    # Get master ticket ID if merged
-    # -----------------------------
+    # Get master ticket ID
     try:
         master_id = get_master_ticket_id(ticket_id)
         logging.info("🔀 Master ticket id: %s", master_id)
@@ -147,9 +138,7 @@ async def freshdesk_webhook(request: Request):
         logging.exception("❌ Failed to get master ticket id: %s", e)
         master_id = ticket_id
 
-    # -----------------------------
     # AI classification
-    # -----------------------------
     system_prompt = (
         "You are a customer support assistant. Always respond in English only. "
         "Return JSON with: intent (one word), confidence (0-1), summary (2-3 lines), "
@@ -160,16 +149,8 @@ async def freshdesk_webhook(request: Request):
         "[Helpful AI reply]\n\n"
         "Best regards,\nSupport Team"
     )
+    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nReturn valid JSON only."
 
-    user_prompt = f"""
-Ticket subject:
-{subject}
-
-Ticket body:
-{description}
-
-Return valid JSON only.
-"""
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
         assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
@@ -190,9 +171,7 @@ Return valid JSON only.
     confidence = parsed.get("confidence", 0.0)
     is_payment_issue = intent in ["BILLING", "PAYMENT"]
 
-    # -----------------------------
     # Build draft note
-    # -----------------------------
     note = f"""**🤖 AI Assist (draft)**
 
 **Intent:** {intent}
@@ -217,9 +196,7 @@ Return valid JSON only.
     except Exception as e:
         logging.exception("❌ Failed posting note: %s", e)
 
-    # -----------------------------
     # Auto-reply if safe
-    # -----------------------------
     auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
     if auto_reply_ok:
         try:
@@ -230,9 +207,6 @@ Return valid JSON only.
     else:
         logging.info("ℹ️ Auto-reply skipped (intent/setting)")
 
-    # -----------------------------
-    # Return response
-    # -----------------------------
     return {
         "ok": True,
         "ticket": ticket_id,
