@@ -95,29 +95,44 @@ async def freshdesk_webhook(request: Request):
     payload = await request.json()
     logging.info("📩 Incoming Freshdesk payload: %s", payload)
 
-    # Extract ticket details
-    ticket = payload.get("ticket", {})
+    # -----------------------------
+    # Extract ticket object safely
+    # -----------------------------
+    ticket = payload.get("ticket") or payload  # fallback to payload if no "ticket" key
     ticket_id = ticket.get("id") or payload.get("id")
     subject = ticket.get("subject", "")
     description = ticket.get("description", "")
 
-    # ✅ Correct requester email extraction
-    requester_email = ticket.get("requester", {}).get("email", "") or payload.get("email", "")
+    # -----------------------------
+    # Correct requester email extraction
+    # -----------------------------
+    requester_email = (
+        ticket.get("requester", {}).get("email") or
+        ticket.get("contact", {}).get("email") or
+        payload.get("email") or
+        ""
+    )
     logging.info("🔹 Extracted requester_email: %s", requester_email)
 
     if not ticket_id:
         logging.error("❌ Ticket id not found in payload")
         return {"ok": False, "error": "ticket id not found"}
 
-    # ✅ Only process if test email
+    # -----------------------------
+    # Only process specific test email
+    # -----------------------------
     if requester_email.lower() != TEST_EMAIL.lower():
         logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
         return {"ok": True, "skipped": True}
 
+    # -----------------------------
     # Check merged ticket → always post to master
+    # -----------------------------
     master_id = get_master_ticket_id(ticket_id)
 
+    # -----------------------------
     # AI classification
+    # -----------------------------
     system_prompt = (
         "You are a customer support assistant. Always respond in English only. "
         "Return JSON with: intent (one word), confidence (0-1), summary (2-3 lines), "
@@ -154,12 +169,13 @@ Return valid JSON only.
             "kb_suggestions": []
         }
 
-    # High priority if payment/billing
     intent = parsed.get("intent", "UNKNOWN").upper()
     confidence = parsed.get("confidence", 0.0)
     is_payment_issue = intent in ["BILLING", "PAYMENT"]
 
+    # -----------------------------
     # Build draft note
+    # -----------------------------
     note = f"""**🤖 AI Assist (draft)**
 
 **Intent:** {intent}
@@ -176,7 +192,7 @@ Return valid JSON only.
 **KB Suggestions:**
 {json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
 
-{"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._" }
+{"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
 """
     try:
         post_freshdesk_note(master_id, note, private=True)
@@ -184,8 +200,11 @@ Return valid JSON only.
     except Exception as e:
         logging.exception("❌ Failed posting note: %s", e)
 
+    # -----------------------------
     # Auto-reply if safe
-    if ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE:
+    # -----------------------------
+    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+    if auto_reply_ok:
         try:
             post_freshdesk_reply(master_id, parsed.get("reply_draft", ""))
             logging.info("✅ Auto-replied to ticket %s", master_id)
@@ -201,5 +220,5 @@ Return valid JSON only.
         "intent": intent,
         "confidence": confidence,
         "requester_email": requester_email,
-        "auto_reply": ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+        "auto_reply": auto_reply_ok
     }
