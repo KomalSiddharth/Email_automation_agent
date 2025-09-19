@@ -1,4 +1,3 @@
-# main.py
 import os
 import json
 import logging
@@ -27,6 +26,7 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "false").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
+TEST_EMAIL = "komlasiddharth814@gmail.com"  # ✅ Only this email is processed
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -35,7 +35,6 @@ if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
 # Helpers
 # --------------------------
 def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperature=0.0):
-    """Call OpenAI API for structured AI response."""
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": OPENAI_MODEL,
@@ -59,7 +58,6 @@ def get_freshdesk_ticket(ticket_id: int):
     return resp.json()
 
 def get_master_ticket_id(ticket_id: int) -> int:
-    """Check if ticket is merged; return master id if exists."""
     ticket = get_freshdesk_ticket(ticket_id)
     if not ticket:
         return ticket_id
@@ -101,10 +99,21 @@ async def freshdesk_webhook(request: Request):
     ticket_id = payload.get("id") or (payload.get("ticket") or {}).get("id")
     subject = payload.get("subject") or (payload.get("ticket") or {}).get("subject", "")
     description = payload.get("description") or (payload.get("ticket") or {}).get("description", "")
+    requester_email = (
+        payload.get("email")
+        or (payload.get("ticket") or {}).get("email")
+        or (payload.get("requester") or {}).get("email")
+        or ""
+    )
 
     if not ticket_id:
         logging.error("❌ Ticket id not found in payload")
         return {"ok": False, "error": "ticket id not found"}
+
+    # ✅ Only process if test email
+    if requester_email.lower() != TEST_EMAIL.lower():
+        logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
+        return {"ok": True, "skipped": True}
 
     # Check merged ticket → always post to master
     master_id = get_master_ticket_id(ticket_id)
@@ -192,5 +201,6 @@ Return valid JSON only.
         "master_ticket": master_id,
         "intent": intent,
         "confidence": confidence,
+        "requester_email": requester_email,
         "auto_reply": ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
     }
