@@ -115,9 +115,10 @@ async def freshdesk_webhook(request: Request):
     logging.info("🔹 Extracted requester_email: %s", requester_email)
 
     if not ticket_id:
-        logging.error("❌ Ticket id not found in payload")
+        logging.error("❌ Ticket id not found in payload: %s", payload)
         return {"ok": False, "error": "ticket id not found"}
-
+    if not requester_email:
+    logging.warning("⚠️ Requester email missing in payload: %s", payload)
     # -----------------------------
     # Only process specific test email
     # -----------------------------
@@ -222,3 +223,4 @@ Return valid JSON only.
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
