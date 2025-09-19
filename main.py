@@ -26,7 +26,7 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "false").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
-TEST_EMAIL = "komlasiddharth814@gmail.com"  # ✅ Only this email is processed
+TEST_EMAIL = "komalsiddharth814@gmail.com"  # ✅ Only this email is processed
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -96,15 +96,14 @@ async def freshdesk_webhook(request: Request):
     logging.info("📩 Incoming Freshdesk payload: %s", payload)
 
     # Extract ticket details
-    ticket_id = payload.get("id") or (payload.get("ticket") or {}).get("id")
-    subject = payload.get("subject") or (payload.get("ticket") or {}).get("subject", "")
-    description = payload.get("description") or (payload.get("ticket") or {}).get("description", "")
-    requester_email = (
-        payload.get("email")
-        or (payload.get("ticket") or {}).get("email")
-        or (payload.get("requester") or {}).get("email")
-        or ""
-    )
+    ticket = payload.get("ticket", {})
+    ticket_id = ticket.get("id") or payload.get("id")
+    subject = ticket.get("subject", "")
+    description = ticket.get("description", "")
+
+    # ✅ Correct requester email extraction
+    requester_email = ticket.get("requester", {}).get("email", "") or payload.get("email", "")
+    logging.info("🔹 Extracted requester_email: %s", requester_email)
 
     if not ticket_id:
         logging.error("❌ Ticket id not found in payload")
@@ -177,7 +176,7 @@ Return valid JSON only.
 **KB Suggestions:**
 {json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
 
-{"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
+{"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._" }
 """
     try:
         post_freshdesk_note(master_id, note, private=True)
