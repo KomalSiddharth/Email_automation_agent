@@ -19,7 +19,9 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "false").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
-TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
+
+# Only process this email during testing
+TEST_EMAIL = "komalsiddharth814@gmail.com"
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -195,8 +197,9 @@ async def freshdesk_webhook(request: Request):
     confidence = parsed.get("confidence", 0.0)
     is_payment_issue = intent in ["BILLING", "PAYMENT"]
 
-    # Build draft note
-    note = f"""**🤖 AI Assist (draft)**
+    # Build draft note (payment tickets only)
+    if is_payment_issue:
+        note = f"""**🤖 AI Assist (draft)**
 
 **Intent:** {intent}
 **Confidence:** {confidence}
@@ -212,16 +215,17 @@ async def freshdesk_webhook(request: Request):
 **KB Suggestions:**
 {json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
 
-{"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
+⚠️ Payment-related issue → private draft only.
 """
-    try:
-        post_freshdesk_note(master_id, note, private=True)
-        logging.info("✅ Posted private draft to ticket %s", master_id)
-    except Exception as e:
-        logging.exception("❌ Failed posting note: %s", e)
+        try:
+            post_freshdesk_note(master_id, note, private=True)
+            logging.info("✅ Posted private draft to ticket %s", master_id)
+        except Exception as e:
+            logging.exception("❌ Failed posting note: %s", e)
+        return {"ok": True, "ticket": ticket_id, "master_ticket": master_id, "note_posted": True}
 
     # Auto-reply if safe
-    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+    auto_reply_ok = ENABLE_AUTO_REPLY and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
     if auto_reply_ok:
         try:
             post_freshdesk_reply(master_id, parsed.get("reply_draft", ""))
