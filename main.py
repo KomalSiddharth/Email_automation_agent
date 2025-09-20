@@ -92,6 +92,10 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
 @app.get("/")
 def root():
     return {"message": "AI Email Automation Backend Running"}
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 
 
 @app.post("/freshdesk-webhook")
@@ -216,3 +220,4 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
