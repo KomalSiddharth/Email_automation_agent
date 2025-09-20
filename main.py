@@ -53,7 +53,7 @@ def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperatur
 
 
 def get_freshdesk_ticket(ticket_id: int) -> dict | None:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}?include=requester"
     resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
     if resp.status_code != 200:
         logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
@@ -61,8 +61,8 @@ def get_freshdesk_ticket(ticket_id: int) -> dict | None:
     return resp.json()
 
 
-def get_master_ticket_id(ticket_id: int) -> int:
-    ticket = get_freshdesk_ticket(ticket_id)
+def get_master_ticket_id(ticket_id: int, ticket_details: dict = None) -> int:
+    ticket = ticket_details or get_freshdesk_ticket(ticket_id)
     if not ticket:
         return ticket_id
     parent_id = ticket.get("merged_ticket_id") or ticket.get("custom_fields", {}).get("cf_parent_ticket_id")
@@ -84,33 +84,6 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
     resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body}, timeout=20)
     resp.raise_for_status()
     return resp.json()
-
-
-def extract_requester_email(payload: dict) -> str:
-    """
-    Robust extraction of requester email from payload
-    Handles different Freshdesk webhook structures
-    """
-    logging.info("🔍 Payload for email extraction: %s", json.dumps(payload, ensure_ascii=False))
-    ticket = payload.get("ticket") or payload
-
-    # Direct checks
-    if "requester" in ticket and "email" in ticket["requester"]:
-        return ticket["requester"]["email"].lower()
-    if "contact" in ticket and "email" in ticket["contact"]:
-        return ticket["contact"]["email"].lower()
-    if "requester_email" in ticket:
-        return ticket["requester_email"].lower()
-    if "email" in ticket:
-        return ticket["email"].lower()
-    if "from" in ticket:
-        return ticket["from"].lower()
-
-    # fallback for nested structures
-    try:
-        return payload["ticket"]["requester"]["email"].lower()
-    except:
-        return ""
 
 
 # --------------------------
@@ -137,28 +110,34 @@ async def freshdesk_webhook(request: Request):
     # Extract ticket details safely
     ticket = payload.get("ticket") or payload
     ticket_id = ticket.get("id") or payload.get("id")
-    subject = ticket.get("subject", "")
-    description = ticket.get("description", "")
-
-    # Extract requester email robustly
-    requester_email = extract_requester_email(payload)
-    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
 
     if not ticket_id:
         logging.error("❌ Ticket id missing in payload")
         return {"ok": False, "error": "ticket id not found"}
 
+    # Fetch ticket details from API for robust data extraction
+    ticket_details = get_freshdesk_ticket(ticket_id)
+    if not ticket_details:
+        logging.error("❌ Failed to fetch ticket details for %s", ticket_id)
+        return {"ok": False, "error": "failed to fetch ticket"}
+
+    requester_email = ticket_details.get("requester", {}).get("email", "").lower()
+    subject = ticket_details.get("subject", "")
+    description = ticket_details.get("description_text", "")  # Use plain text for AI processing
+
+    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
+
     if not requester_email:
-        logging.warning("⚠️ Requester email missing, skipping auto-reply")
+        logging.warning("⚠️ Requester email missing after API fetch, skipping auto-reply")
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
-    if requester_email.lower() != TEST_EMAIL.lower():
+    if requester_email != TEST_EMAIL.lower():
         logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
         return {"ok": True, "skipped": True}
 
     # Get master ticket ID
     try:
-        master_id = get_master_ticket_id(ticket_id)
+        master_id = get_master_ticket_id(ticket_id, ticket_details)
         logging.info("🔀 Master ticket id: %s", master_id)
     except Exception as e:
         logging.exception("❌ Failed to get master ticket id: %s", e)
