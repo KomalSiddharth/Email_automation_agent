@@ -87,36 +87,27 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
 
 
 def extract_requester_email(payload: dict) -> str:
-    """
-    Robustly extract requester email from Freshdesk payload.
-    Returns lowercase email or empty string if not found.
-    """
-    # Top-level keys
-    keys = ["requester_email", "contact_email", "email", "from"]
-    for key in keys:
-        val = payload.get(key)
-        if isinstance(val, str) and val:
+    """Robust extraction of requester email from payload"""
+    logging.info("🔍 Payload for email extraction: %s", json.dumps(payload, ensure_ascii=False))
+    ticket = payload.get("ticket") or payload
+
+    possible_paths = [
+        ["requester", "email"],
+        ["contact", "email"],
+        ["requester_email"],
+        ["email"],
+        ["from"]
+    ]
+    for path in possible_paths:
+        val = ticket
+        for key in path:
+            if isinstance(val, dict):
+                val = val.get(key)
+            else:
+                val = None
+                break
+        if isinstance(val, str) and val.strip():
             return val.lower()
-        elif isinstance(val, dict):
-            for subkey in ["email", "contact_email"]:
-                if val.get(subkey):
-                    return val[subkey].lower()
-
-    # Check inside ticket object
-    ticket = payload.get("ticket") or {}
-    for key in ["requester", "contact"]:
-        obj = ticket.get(key)
-        if obj and isinstance(obj, dict):
-            for subkey in ["email", "contact_email"]:
-                if obj.get(subkey):
-                    return obj[subkey].lower()
-
-    # Fallback: ticket top-level fields
-    for key in ["requester_email", "contact_email", "email"]:
-        val = ticket.get(key)
-        if isinstance(val, str) and val:
-            return val.lower()
-
     return ""
 
 
@@ -126,7 +117,6 @@ def extract_requester_email(payload: dict) -> str:
 @app.get("/")
 def root():
     return {"message": "AI Email Automation Backend Running"}
-
 
 @app.get("/health")
 def health():
@@ -148,7 +138,7 @@ async def freshdesk_webhook(request: Request):
     subject = ticket.get("subject", "")
     description = ticket.get("description", "")
 
-    # Extract requester email using robust function
+    # Extract requester email robustly
     requester_email = extract_requester_email(payload)
     logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
 
