@@ -86,16 +86,51 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
     return resp.json()
 
 
+def extract_requester_email(payload: dict) -> str:
+    """
+    Robustly extract requester email from Freshdesk payload.
+    Returns lowercase email or empty string if not found.
+    """
+    # Top-level keys
+    keys = ["requester_email", "contact_email", "email", "from"]
+    for key in keys:
+        val = payload.get(key)
+        if isinstance(val, str) and val:
+            return val.lower()
+        elif isinstance(val, dict):
+            for subkey in ["email", "contact_email"]:
+                if val.get(subkey):
+                    return val[subkey].lower()
+
+    # Check inside ticket object
+    ticket = payload.get("ticket") or {}
+    for key in ["requester", "contact"]:
+        obj = ticket.get(key)
+        if obj and isinstance(obj, dict):
+            for subkey in ["email", "contact_email"]:
+                if obj.get(subkey):
+                    return obj[subkey].lower()
+
+    # Fallback: ticket top-level fields
+    for key in ["requester_email", "contact_email", "email"]:
+        val = ticket.get(key)
+        if isinstance(val, str) and val:
+            return val.lower()
+
+    return ""
+
+
 # --------------------------
 # Routes
 # --------------------------
 @app.get("/")
 def root():
     return {"message": "AI Email Automation Backend Running"}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 
 
 @app.post("/freshdesk-webhook")
@@ -113,13 +148,8 @@ async def freshdesk_webhook(request: Request):
     subject = ticket.get("subject", "")
     description = ticket.get("description", "")
 
-    # Extract requester email
-    requester_email = (
-        ticket.get("requester", {}).get("email") or
-        ticket.get("contact", {}).get("email") or
-        payload.get("email") or
-        ""
-    )
+    # Extract requester email using robust function
+    requester_email = extract_requester_email(payload)
     logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
 
     if not ticket_id:
@@ -220,4 +250,3 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
-
