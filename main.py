@@ -19,9 +19,7 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "false").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
-
-# Only process this email during testing
-TEST_EMAIL = "komalsiddharth814@gmail.com"
+TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -89,28 +87,30 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
 
 
 def extract_requester_email(payload: dict) -> str:
-    """Robust extraction of requester email from payload"""
+    """
+    Robust extraction of requester email from payload
+    Handles different Freshdesk webhook structures
+    """
     logging.info("🔍 Payload for email extraction: %s", json.dumps(payload, ensure_ascii=False))
     ticket = payload.get("ticket") or payload
 
-    possible_paths = [
-        ["requester", "email"],
-        ["contact", "email"],
-        ["requester_email"],
-        ["email"],
-        ["from"]
-    ]
-    for path in possible_paths:
-        val = ticket
-        for key in path:
-            if isinstance(val, dict):
-                val = val.get(key)
-            else:
-                val = None
-                break
-        if isinstance(val, str) and val.strip():
-            return val.lower()
-    return ""
+    # Direct checks
+    if "requester" in ticket and "email" in ticket["requester"]:
+        return ticket["requester"]["email"].lower()
+    if "contact" in ticket and "email" in ticket["contact"]:
+        return ticket["contact"]["email"].lower()
+    if "requester_email" in ticket:
+        return ticket["requester_email"].lower()
+    if "email" in ticket:
+        return ticket["email"].lower()
+    if "from" in ticket:
+        return ticket["from"].lower()
+
+    # fallback for nested structures
+    try:
+        return payload["ticket"]["requester"]["email"].lower()
+    except:
+        return ""
 
 
 # --------------------------
@@ -197,9 +197,8 @@ async def freshdesk_webhook(request: Request):
     confidence = parsed.get("confidence", 0.0)
     is_payment_issue = intent in ["BILLING", "PAYMENT"]
 
-    # Build draft note (payment tickets only)
-    if is_payment_issue:
-        note = f"""**🤖 AI Assist (draft)**
+    # Build draft note
+    note = f"""**🤖 AI Assist (draft)**
 
 **Intent:** {intent}
 **Confidence:** {confidence}
@@ -215,17 +214,16 @@ async def freshdesk_webhook(request: Request):
 **KB Suggestions:**
 {json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
 
-⚠️ Payment-related issue → private draft only.
+{"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
 """
-        try:
-            post_freshdesk_note(master_id, note, private=True)
-            logging.info("✅ Posted private draft to ticket %s", master_id)
-        except Exception as e:
-            logging.exception("❌ Failed posting note: %s", e)
-        return {"ok": True, "ticket": ticket_id, "master_ticket": master_id, "note_posted": True}
+    try:
+        post_freshdesk_note(master_id, note, private=True)
+        logging.info("✅ Posted private draft to ticket %s", master_id)
+    except Exception as e:
+        logging.exception("❌ Failed posting note: %s", e)
 
     # Auto-reply if safe
-    auto_reply_ok = ENABLE_AUTO_REPLY and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
     if auto_reply_ok:
         try:
             post_freshdesk_reply(master_id, parsed.get("reply_draft", ""))
