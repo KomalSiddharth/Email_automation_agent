@@ -145,15 +145,16 @@ async def freshdesk_webhook(request: Request):
 
     # AI classification
     system_prompt = (
-        "You are a customer support assistant. Always respond in English only. "
-        "Return JSON with: intent (one word), confidence (0-1), summary (2-3 lines), "
-        "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template), "
-        "kb_suggestions (list of short titles or URLs).\n"
-        "Reply template:\n"
-        "Dear [CustomerName],\n\n"
-        "[Helpful AI reply]\n\n"
-        "Best regards,\nSupport Team"
-    )
+    "You are a customer support assistant. Always respond in English only. "
+    "Return JSON with: intent (one word from: COURSE_INQUIRY, GENERAL, BILLING, PAYMENT, UNKNOWN), confidence (0-1), summary (2-3 lines), "
+    "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template, fill in real details if known), "
+    "kb_suggestions (list of short titles or URLs).\n"
+    "For course-related questions, use COURSE_INQUIRY. For billing/payment, use BILLING or PAYMENT.\n"
+    "Reply template:\n"
+    "Dear [CustomerName],\n\n"
+    "[Helpful AI reply with course details: NLP course fee is Rs. 29,500, duration 12 weeks, next batch October 18-19, 2025 if known]\n\n"
+    "Best regards,\nSupport Team"
+)
     user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nReturn valid JSON only."
 
     try:
@@ -221,3 +222,4 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
