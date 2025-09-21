@@ -143,19 +143,28 @@ async def freshdesk_webhook(request: Request):
         logging.exception("❌ Failed to get master ticket id: %s", e)
         master_id = ticket_id
 
+    # Extract customer name for personalization
+    customer_name = ticket_details.get('custom_fields', {}).get('cf_name_3236108') or ticket_details.get('requester', {}).get('name', 'Customer')
+    logging.info("🔹 Customer name: %s", customer_name)
+
     # AI classification
     system_prompt = (
-    "You are a customer support assistant. Always respond in English only. "
-    "Return JSON with: intent (one word from: COURSE_INQUIRY, GENERAL, BILLING, PAYMENT, UNKNOWN), confidence (0-1), summary (2-3 lines), "
-    "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template, fill in real details if known), "
-    "kb_suggestions (list of short titles or URLs).\n"
-    "For course-related questions, use COURSE_INQUIRY. For billing/payment, use BILLING or PAYMENT.\n"
-    "Reply template:\n"
-    "Dear [CustomerName],\n\n"
-    "[Helpful AI reply with course details: NLP course fee is Rs. 29,500, duration 12 weeks, next batch October 18-19, 2025 if known]\n\n"
-    "Best regards,\nSupport Team"
-)
-    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nReturn valid JSON only."
+        "You are a customer support assistant. Always respond in English only. "
+        "Return JSON with: intent (one word from: COURSE_INQUIRY, GENERAL, BILLING, PAYMENT, UNKNOWN), confidence (0-1), summary (2-3 lines), "
+        "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template, fill in real details if known), "
+        "kb_suggestions (list of short titles or URLs).\n"
+        "For course-related questions, use COURSE_INQUIRY. For billing/payment, use BILLING or PAYMENT.\n"
+        "Reply template (use HTML for the image):\n"
+        "Hi [CustomerName],\n"
+        "Thank you for reaching out to us,\n\n"
+        "This is Rahul from team IMK, We are here to help you\n\n"
+        "[Helpful AI reply with course details: NLP course fee is Rs. 29,500, duration 12 weeks, next batch October 18-19, 2025 if known]\n\n"
+        "Thanks & Regards\n"
+        "Rahul\n"
+        "Team IMK\n"
+        "<img src='https://drive.google.com/file/d/1bkXJuYtOmfN8xdsXe7PbenXKU0sSLpib/view?usp=sharing' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>"
+    )
+    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nReturn valid JSON only."
 
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
@@ -222,6 +231,3 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
-
-
-
