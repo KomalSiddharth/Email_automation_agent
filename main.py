@@ -162,7 +162,7 @@ async def freshdesk_webhook(request: Request):
         "Thanks & Regards<br>"
         "Rahul<br>"
         "Team IMK<br>"
-        "<img src='https://drive.google.com/uc?export=view&id=YOUR_FILE_ID_HERE' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>"
+        "<img src='https://ibb.co/Rk9cchRs' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>"
     )
     user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nReturn valid JSON only."
 
@@ -231,4 +231,5 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
 
