@@ -154,15 +154,15 @@ async def freshdesk_webhook(request: Request):
         "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template, fill in real details if known), "
         "kb_suggestions (list of short titles or URLs).\n"
         "For course-related questions, use COURSE_INQUIRY. For billing/payment, use BILLING or PAYMENT.\n"
-        "Reply template (use HTML for the image):\n"
-        "Hi [CustomerName],\n"
-        "Thank you for reaching out to us,\n\n"
-        "This is Rahul from team IMK, We are here to help you\n\n"
-        "[Helpful AI reply with course details: NLP course fee is Rs. 29,500, duration 12 weeks, next batch October 18-19, 2025 if known]\n\n"
-        "Thanks & Regards\n"
-        "Rahul\n"
-        "Team IMK\n"
-        "<img src='https://drive.google.com/file/d/1bkXJuYtOmfN8xdsXe7PbenXKU0sSLpib/view?usp=sharing' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>"
+        "Reply template (use HTML for formatting and the image; use <br> for line breaks):\n"
+        "Hi [CustomerName],<br><br>"
+        "Thank you for reaching out to us,<br><br>"
+        "This is Rahul from team IMK, We are here to help you<br><br>"
+        "[Helpful AI reply with course details: NLP course fee is Rs. 29,500, duration 12 weeks, next batch October 18-19, 2025 if known]<br><br>"
+        "Thanks & Regards<br>"
+        "Rahul<br>"
+        "Team IMK<br>"
+        "<img src='https://drive.google.com/uc?export=view&id=YOUR_FILE_ID_HERE' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>"
     )
     user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nReturn valid JSON only."
 
@@ -231,3 +231,4 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
