@@ -309,4 +309,3 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
-
