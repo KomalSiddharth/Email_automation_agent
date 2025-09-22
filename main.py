@@ -23,7 +23,7 @@ SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COUR
 TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
 PAYMENT_GROUP_ID = int(os.getenv("PAYMENT_GROUP_ID", 0))  # Your Freshdesk group ID for payments (0 to skip)
 PAYMENT_AGENT_ID = int(os.getenv("PAYMENT_AGENT_ID", 0))  # Your Freshdesk agent ID for payments (0 to skip)
-COURSES_EXCEL_PATH = os.getenv("COURSES_EXCEL_PATH", "courses.xlsx")  # Configurable path to Excel
+COURSES_EXCEL_PATH = os.getenv("COURSES_EXCEL_PATH", "fees_and_certificates.xlsx")  # Configurable path to Excel
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -222,7 +222,7 @@ async def freshdesk_webhook(request: Request):
         "Thanks & Regards<br>"
         "Rahul<br>"
         "Team IMK<br>"
-        "<img src='data:image/png;base64,YOUR_BASE64_STRING_HERE' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>"
+        "<img src='KaXXvt7oI1zZcy9lII6Uko_ul1XCojrmug.png' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>"
     )
     user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nCourse Details (use if COURSE_INQUIRY): {course_details}\n\nReturn valid JSON only."
 
@@ -309,3 +309,4 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
