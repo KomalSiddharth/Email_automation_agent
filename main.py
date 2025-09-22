@@ -4,6 +4,7 @@ import logging
 import requests
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
+import pandas as pd  # For Excel loading
 
 # --------------------------
 # Load Environment Variables
@@ -22,9 +23,18 @@ SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COUR
 TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
 PAYMENT_GROUP_ID = int(os.getenv("PAYMENT_GROUP_ID", 0))  # Your Freshdesk group ID for payments (0 to skip)
 PAYMENT_AGENT_ID = int(os.getenv("PAYMENT_AGENT_ID", 0))  # Your Freshdesk agent ID for payments (0 to skip)
+COURSES_EXCEL_PATH = os.getenv("COURSES_EXCEL_PATH", "courses.xlsx")  # Configurable path to Excel
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
+
+# Load courses Excel at startup (global for efficiency)
+try:
+    COURSES_DF = pd.read_excel(COURSES_EXCEL_PATH)
+    logging.info("✅ Loaded courses Excel with %d rows", len(COURSES_DF))
+except Exception as e:
+    logging.error("❌ Failed to load courses.xlsx: %s", e)
+    COURSES_DF = pd.DataFrame()  # Empty fallback
 
 # --------------------------
 # App & Logging
@@ -63,6 +73,15 @@ def get_freshdesk_ticket(ticket_id: int) -> dict | None:
     return resp.json()
 
 
+def get_freshdesk_conversations(ticket_id: int) -> list | None:
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/conversations"
+    resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
+    if resp.status_code != 200:
+        logging.error("❌ Failed to fetch conversations for ticket %s: %s", ticket_id, resp.text)
+        return None
+    return resp.json()
+
+
 def get_master_ticket_id(ticket_id: int, ticket_details: dict = None) -> int:
     ticket = ticket_details or get_freshdesk_ticket(ticket_id)
     if not ticket:
@@ -93,6 +112,20 @@ def update_freshdesk_ticket(ticket_id: int, update_payload: dict) -> dict:
     resp = requests.put(url, auth=(FRESHDESK_API_KEY, "X"), json=update_payload, timeout=20)
     resp.raise_for_status()
     return resp.json()
+
+
+def get_course_details(course_name: str) -> str:
+    """Query Excel for course details based on name (case-insensitive partial match)."""
+    if COURSES_DF.empty:
+        return "Course details not available."
+    # Simple match: Find row where course name contains the query (case-insensitive)
+    matched = COURSES_DF[COURSES_DF['Course Name'].str.contains(course_name, case=False, na=False)]
+    if matched.empty:
+        return "No matching course found."
+    # Take first match, format details
+    row = matched.iloc[0]
+    details = f"Fee: {row.get('Fee', 'N/A')}, Duration: {row.get('Duration', 'N/A')}, Certificates: {row.get('Certificates', 'N/A')}, Payment Link: {row.get('Payment Link', 'N/A')}, Next Batch: {row.get('Next Batch', 'N/A')}"
+    return details
 
 
 # --------------------------
@@ -132,7 +165,7 @@ async def freshdesk_webhook(request: Request):
 
     requester_email = ticket_details.get("requester", {}).get("email", "").lower()
     subject = ticket_details.get("subject", "")
-    description = ticket_details.get("description_text", "")  # Use plain text for AI processing
+    description = ticket_details.get("description_text", "")  # Default to initial description
 
     logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
 
@@ -152,9 +185,26 @@ async def freshdesk_webhook(request: Request):
         logging.exception("❌ Failed to get master ticket id: %s", e)
         master_id = ticket_id
 
+    # Check if this is a reply/update (e.g., eventType or payload indicates conversation)
+    event_type = payload.get("eventType", "onTicketCreate")
+    if event_type in ["onConversationCreate", "onTicketUpdate"]:
+        conversations = get_freshdesk_conversations(master_id)
+        if conversations:
+            latest_convo = max(conversations, key=lambda c: c["created_at"])  # Get newest reply
+            description = latest_convo.get("body_text", description)  # Use latest text for AI
+            logging.info("🔄 Handling reply/update with latest description")
+
     # Extract customer name for personalization
     customer_name = ticket_details.get('custom_fields', {}).get('cf_name_3236108') or ticket_details.get('requester', {}).get('name', 'Customer')
     logging.info("🔹 Customer name: %s", customer_name)
+
+    # Prepare course details if relevant (extract possible course name from description)
+    course_details = ""
+    possible_course = ""  # Simple extraction; improve with regex/AI if needed
+    if "course" in description.lower():
+        # Assume course name is mentioned; extract first potential name (e.g., after "course")
+        possible_course = description.lower().split("course")[ -1].strip().split()[0].capitalize() if "course" in description.lower() else ""
+        course_details = get_course_details(possible_course)
 
     # AI classification
     system_prompt = (
@@ -168,13 +218,13 @@ async def freshdesk_webhook(request: Request):
         "Hi [CustomerName],<br><br>"
         "Thank you for reaching out to us,<br><br>"
         "This is Rahul from team IMK, We are here to help you<br><br>"
-        "[Helpful AI reply with course details: NLP course fee is Rs. 29,500, duration 12 weeks, next batch October 18-19, 2025 if known]<br><br>"
+        "[Helpful AI reply incorporating provided course details if relevant]<br><br>"
         "Thanks & Regards<br>"
         "Rahul<br>"
         "Team IMK<br>"
         "<img src='data:image/png;base64,YOUR_BASE64_STRING_HERE' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>"
     )
-    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nReturn valid JSON only."
+    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nCourse Details (use if COURSE_INQUIRY): {course_details}\n\nReturn valid JSON only."
 
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
@@ -193,7 +243,7 @@ async def freshdesk_webhook(request: Request):
             "confidence": 1.0,    # Set high confidence to enable reply if safe
             "summary": description[:200],
             "sentiment": "UNKNOWN",
-            "reply_draft": f"Hi {customer_name},<br><br>Thank you for reaching out to us,<br><br>This is Rahul from team IMK, We are here to help you<br><br>We appreciate your message. If you have any specific questions, feel free to provide more details.<br><br>Thanks & Regards<br>Rahul<br>Team IMK<br><img src='data:image/png;base64,YOUR_BASE64_STRING_HERE' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>",
+            "reply_draft": f"Hi {customer_name},<br><br>Thank you for reaching out to us,<br><br>This is Rahul from team IMK, We are here to help you<br><br>We appreciate your message. If you have any specific questions, feel free to provide more details. {course_details}<br><br>Thanks & Regards<br>Rahul<br>Team IMK<br><img src='data:image/png;base64,YOUR_BASE64_STRING_HERE' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>",
             "kb_suggestions": []
         }
 
