@@ -29,7 +29,7 @@ if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
 # Initialize COURSES_DF
 # --------------------------
 try:
-    COURSES_DF = pd.read_csv("courses.csv")  # Adjust path if needed
+    COURSES_DF = pd.read_csv("fees_and_certificates.xlsx")  # Adjust path if needed
     logging.info("✅ Loaded COURSES_DF with %d rows", len(COURSES_DF))
 except Exception as e:
     logging.error("❌ Failed to load COURSES_DF: %s", e)
@@ -104,24 +104,38 @@ def extract_requester_email(payload: dict) -> str:
     """
     logging.info("🔍 Payload for email extraction: %s", json.dumps(payload, ensure_ascii=False))
     ticket = payload.get("ticket") or payload
+    logging.info("🔍 Ticket dictionary: %s", json.dumps(ticket, ensure_ascii=False))
 
     # Direct checks
-    if "requester" in ticket and "email" in ticket["requester"]:
+    if "requester" in ticket and isinstance(ticket["requester"], dict) and "email" in ticket["requester"]:
+        logging.info("✅ Found email in ticket.requester.email")
         return ticket["requester"]["email"].lower()
-    if "contact" in ticket and "email" in ticket["contact"]:
+    if "contact" in ticket and isinstance(ticket["contact"], dict) and "email" in ticket["contact"]:
+        logging.info("✅ Found email in ticket.contact.email")
         return ticket["contact"]["email"].lower()
     if "requester_email" in ticket:
+        logging.info("✅ Found email in ticket.requester_email")
         return ticket["requester_email"].lower()
     if "email" in ticket:
+        logging.info("✅ Found email in ticket.email")
         return ticket["email"].lower()
     if "from" in ticket:
+        logging.info("✅ Found email in ticket.from")
         return ticket["from"].lower()
+    if "from_email" in ticket:
+        logging.info("✅ Found email in ticket.from_email")
+        return ticket["from_email"].lower()
 
     # Fallback for nested structures
     try:
-        return payload["ticket"]["requester"]["email"].lower()
-    except:
-        return ""
+        email = payload["ticket"]["requester"]["email"].lower()
+        logging.info("✅ Found email in nested ticket.requester.email")
+        return email
+    except Exception as e:
+        logging.warning("⚠️ Nested email extraction failed: %s", e)
+
+    logging.warning("⚠️ No email found in payload")
+    return ""
 
 
 def get_course_details(course_name: str) -> dict:
@@ -180,8 +194,14 @@ async def freshdesk_webhook(request: Request):
         return {"ok": False, "error": "ticket id not found"}
 
     if not requester_email:
-        logging.warning("⚠️ Requester email missing, skipping auto-reply")
-        return {"ok": True, "skipped": True, "reason": "missing requester_email"}
+        logging.warning("⚠️ Requester email missing in payload, attempting API fetch")
+        ticket_data = get_freshdesk_ticket(ticket_id)
+        if ticket_data and "requester" in ticket_data and "email" in ticket_data["requester"]:
+            requester_email = ticket_data["requester"]["email"].lower()
+            logging.info("✅ Fetched email from API: %s", requester_email)
+        else:
+            logging.warning("⚠️ Requester email not found in API response, skipping auto-reply")
+            return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
     if requester_email.lower() != TEST_EMAIL.lower():
         logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
