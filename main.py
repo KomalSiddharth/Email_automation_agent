@@ -4,7 +4,7 @@ import logging
 import requests
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
-import pandas as pd  # For Excel loading
+import pandas as pd
 
 # --------------------------
 # Load Environment Variables
@@ -17,24 +17,23 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
-ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "true").lower() == "true"
+ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "false").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
 TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
-PAYMENT_GROUP_ID = int(os.getenv("PAYMENT_GROUP_ID", 0))  # Your Freshdesk group ID for payments (0 to skip)
-PAYMENT_AGENT_ID = int(os.getenv("PAYMENT_AGENT_ID", 0))  # Your Freshdesk agent ID for payments (0 to skip)
-COURSES_EXCEL_PATH = os.getenv("COURSES_EXCEL_PATH", "fees_and_certificates.xlsx")  # Configurable path to Excel
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
 
-# Load courses Excel at startup (global for efficiency)
+# --------------------------
+# Initialize COURSES_DF
+# --------------------------
 try:
-    COURSES_DF = pd.read_excel(COURSES_EXCEL_PATH)
-    logging.info("✅ Loaded courses Excel with %d rows", len(COURSES_DF))
+    COURSES_DF = pd.read_csv("courses.csv")  # Adjust path if needed
+    logging.info("✅ Loaded COURSES_DF with %d rows", len(COURSES_DF))
 except Exception as e:
-    logging.error("❌ Failed to load courses.xlsx: %s", e)
-    COURSES_DF = pd.DataFrame()  # Empty fallback
+    logging.error("❌ Failed to load COURSES_DF: %s", e)
+    COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Fallback empty DataFrame
 
 # --------------------------
 # App & Logging
@@ -42,7 +41,7 @@ except Exception as e:
 app = FastAPI()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# --------------------------
+# -------------------------- 
 # Helper Functions
 # --------------------------
 def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperature=0.0) -> dict:
@@ -65,7 +64,7 @@ def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperatur
 
 
 def get_freshdesk_ticket(ticket_id: int) -> dict | None:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}?include=requester"
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
     resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
     if resp.status_code != 200:
         logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
@@ -73,17 +72,8 @@ def get_freshdesk_ticket(ticket_id: int) -> dict | None:
     return resp.json()
 
 
-def get_freshdesk_conversations(ticket_id: int) -> list | None:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/conversations"
-    resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
-    if resp.status_code != 200:
-        logging.error("❌ Failed to fetch conversations for ticket %s: %s", ticket_id, resp.text)
-        return None
-    return resp.json()
-
-
-def get_master_ticket_id(ticket_id: int, ticket_details: dict = None) -> int:
-    ticket = ticket_details or get_freshdesk_ticket(ticket_id)
+def get_master_ticket_id(ticket_id: int) -> int:
+    ticket = get_freshdesk_ticket(ticket_id)
     if not ticket:
         return ticket_id
     parent_id = ticket.get("merged_ticket_id") or ticket.get("custom_fields", {}).get("cf_parent_ticket_id")
@@ -107,33 +97,59 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
     return resp.json()
 
 
-def update_freshdesk_ticket(ticket_id: int, update_payload: dict) -> dict:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
-    resp = requests.put(url, auth=(FRESHDESK_API_KEY, "X"), json=update_payload, timeout=20)
-    resp.raise_for_status()
-    return resp.json()
+def extract_requester_email(payload: dict) -> str:
+    """
+    Robust extraction of requester email from payload
+    Handles different Freshdesk webhook structures
+    """
+    logging.info("🔍 Payload for email extraction: %s", json.dumps(payload, ensure_ascii=False))
+    ticket = payload.get("ticket") or payload
+
+    # Direct checks
+    if "requester" in ticket and "email" in ticket["requester"]:
+        return ticket["requester"]["email"].lower()
+    if "contact" in ticket and "email" in ticket["contact"]:
+        return ticket["contact"]["email"].lower()
+    if "requester_email" in ticket:
+        return ticket["requester_email"].lower()
+    if "email" in ticket:
+        return ticket["email"].lower()
+    if "from" in ticket:
+        return ticket["from"].lower()
+
+    # Fallback for nested structures
+    try:
+        return payload["ticket"]["requester"]["email"].lower()
+    except:
+        return ""
 
 
-def get_course_details(course_name: str) -> str:
-    """Query Excel for course details based on name (case-insensitive partial match)."""
-    if COURSES_DF.empty:
-        return "Course details not available."
-    # Simple match: Find row where course name contains the query (case-insensitive)
-    matched = COURSES_DF[COURSES_DF['Course Name'].str.contains(course_name, case=False, na=False)]
-    if matched.empty:
-        return "No matching course found."
-    # Take first match, format details
-    row = matched.iloc[0]
-    details = f"Fee: {row.get('Fee', 'N/A')}, Duration: {row.get('Duration', 'N/A')}, Certificates: {row.get('Certificates', 'N/A')}, Payment Link: {row.get('Payment Link', 'N/A')}, Next Batch: {row.get('Next Batch', 'N/A')}"
-    return details
+def get_course_details(course_name: str) -> dict:
+    """
+    Fetch course details from COURSES_DF based on course_name
+    """
+    if not course_name or not isinstance(course_name, str):
+        logging.warning("⚠️ Invalid or empty course_name: %s", course_name)
+        return {"course_name": course_name, "details": "No matching course found"}
+
+    try:
+        # Use regex=False to treat course_name as a literal string
+        matched = COURSES_DF[COURSES_DF['Course Name'].str.contains(course_name, case=False, na=False, regex=False)]
+        if not matched.empty:
+            return matched.iloc[0].to_dict()
+        return {"course_name": course_name, "details": "No matching course found"}
+    except Exception as e:
+        logging.exception("❌ Error in get_course_details for %s: %s", course_name, e)
+        return {"course_name": course_name, "details": f"Error: {str(e)}"}
 
 
-# --------------------------
+# -------------------------- 
 # Routes
 # --------------------------
 @app.get("/")
 def root():
     return {"message": "AI Email Automation Backend Running"}
+
 
 @app.get("/health")
 def health():
@@ -152,135 +168,87 @@ async def freshdesk_webhook(request: Request):
     # Extract ticket details safely
     ticket = payload.get("ticket") or payload
     ticket_id = ticket.get("id") or payload.get("id")
+    subject = ticket.get("subject", "")
+    description = ticket.get("description", "")
+
+    # Extract requester email robustly
+    requester_email = extract_requester_email(payload)
+    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
 
     if not ticket_id:
         logging.error("❌ Ticket id missing in payload")
         return {"ok": False, "error": "ticket id not found"}
 
-    # Fetch ticket details from API for robust data extraction
-    ticket_details = get_freshdesk_ticket(ticket_id)
-    if not ticket_details:
-        logging.error("❌ Failed to fetch ticket details for %s", ticket_id)
-        return {"ok": False, "error": "failed to fetch ticket"}
-
-    requester_email = ticket_details.get("requester", {}).get("email", "").lower()
-    subject = ticket_details.get("subject", "")
-    description = ticket_details.get("description_text", "")  # Default to initial description
-
-    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
-
     if not requester_email:
-        logging.warning("⚠️ Requester email missing after API fetch, skipping auto-reply")
+        logging.warning("⚠️ Requester email missing, skipping auto-reply")
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
-    if requester_email != TEST_EMAIL.lower():
+    if requester_email.lower() != TEST_EMAIL.lower():
         logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
         return {"ok": True, "skipped": True}
 
     # Get master ticket ID
     try:
-        master_id = get_master_ticket_id(ticket_id, ticket_details)
+        master_id = get_master_ticket_id(ticket_id)
         logging.info("🔀 Master ticket id: %s", master_id)
     except Exception as e:
         logging.exception("❌ Failed to get master ticket id: %s", e)
         master_id = ticket_id
 
-    # Check if this is a reply/update (e.g., eventType or payload indicates conversation)
-    event_type = payload.get("eventType", "onTicketCreate")
-    if event_type in ["onConversationCreate", "onTicketUpdate"]:
-        conversations = get_freshdesk_conversations(master_id)
-        if conversations:
-            latest_convo = max(conversations, key=lambda c: c["created_at"])  # Get newest reply
-            description = latest_convo.get("body_text", description)  # Use latest text for AI
-            logging.info("🔄 Handling reply/update with latest description")
-
-    # Extract customer name for personalization
-    customer_name = ticket_details.get('custom_fields', {}).get('cf_name_3236108') or ticket_details.get('requester', {}).get('name', 'Customer')
-    logging.info("🔹 Customer name: %s", customer_name)
-
-    # Prepare course details if relevant (extract possible course name from description)
-    course_details = ""
-    possible_course = ""  # Simple extraction; improve with regex/AI if needed
-    if "course" in description.lower():
-        # Assume course name is mentioned; extract first potential name (e.g., after "course")
-        possible_course = description.lower().split("course")[ -1].strip().split()[0].capitalize() if "course" in description.lower() else ""
+    # Extract possible course (placeholder logic; replace with your actual logic)
+    possible_course = subject.split("about")[-1].strip() if "about" in subject.lower() else ""
+    logging.info("🔍 Extracted possible_course: %s", possible_course)
+    possible_course = possible_course or ""
+    if not possible_course.strip():
+        logging.warning("⚠️ No valid course name extracted from ticket %s", ticket_id)
+        course_details = {"course_name": "", "details": "No course specified"}
+    else:
         course_details = get_course_details(possible_course)
 
     # AI classification
     system_prompt = (
         "You are a customer support assistant. Always respond in English only. "
-        "Return ONLY valid JSON with no extra text or markdown: intent (one word from: COURSE_INQUIRY, GENERAL, BILLING, PAYMENT, UNKNOWN), confidence (0-1), summary (2-3 lines), "
-        "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template, fill in real details if known), "
+        "Return JSON with: intent (one word), confidence (0-1), summary (2-3 lines), "
+        "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template), "
         "kb_suggestions (list of short titles or URLs).\n"
-        "For course-related questions, use COURSE_INQUIRY. For billing/payment, use BILLING or PAYMENT. "
-        "If unclear, default to GENERAL instead of UNKNOWN to handle broadly. Only use UNKNOWN if absolutely no match.\n"
-        "Reply template (use HTML for formatting and the image; use <br> for line breaks):\n"
-        "Hi [CustomerName],<br><br>"
-        "Thank you for reaching out to us,<br><br>"
-        "This is Rahul from team IMK, We are here to help you<br><br>"
-        "[Helpful AI reply incorporating provided course details if relevant]<br><br>"
-        "Thanks & Regards<br>"
-        "Rahul<br>"
-        "Team IMK<br>"
-        "<img src='KaXXvt7oI1zZcy9lII6Uko_ul1XCojrmug.png' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>"
-    )
-    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nCourse Details (use if COURSE_INQUIRY): {course_details}\n\nReturn valid JSON only."
+        "Include course details if provided: {course_details}\n"
+        "Reply template:\n"
+        "Dear [CustomerName],\n\n"
+        "[Helpful AI reply]\n\n"
+        "Best regards,\nSupport Team"
+    ).format(course_details=json.dumps(course_details))
+    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nReturn valid JSON only."
 
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
         assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
-        # Strip any potential markdown wrappers
-        if assistant_text.startswith("```json"):
-            assistant_text = assistant_text[7:].strip()
-        if assistant_text.endswith("```"):
-            assistant_text = assistant_text[:-3].strip()
         logging.info("🤖 OpenAI raw response: %s", assistant_text)
         parsed = json.loads(assistant_text)
     except Exception as e:
         logging.exception("⚠️ OpenAI or JSON parse error: %s", e)
         parsed = {
-            "intent": "GENERAL",  # Default to GENERAL for fallback reply
-            "confidence": 1.0,    # Set high confidence to enable reply if safe
+            "intent": "UNKNOWN",
+            "confidence": 0.0,
             "summary": description[:200],
             "sentiment": "UNKNOWN",
-            "reply_draft": f"Hi {customer_name},<br><br>Thank you for reaching out to us,<br><br>This is Rahul from team IMK, We are here to help you<br><br>We appreciate your message. If you have any specific questions, feel free to provide more details. {course_details}<br><br>Thanks & Regards<br>Rahul<br>Team IMK<br><img src='data:image/png;base64,YOUR_BASE64_STRING_HERE' alt='IMK Signature Banner' style='width:100%; max-width:600px;'>",
+            "reply_draft": "AI parsing failed.",
             "kb_suggestions": []
         }
 
-    intent = parsed.get("intent", "GENERAL").upper()
-    confidence = parsed.get("confidence", 1.0)
+    intent = parsed.get("intent", "UNKNOWN").upper()
+    confidence = parsed.get("confidence", 0.0)
     is_payment_issue = intent in ["BILLING", "PAYMENT"]
-
-    # Payment escalation: Set high priority and assign group/agent if configured
-    if is_payment_issue and (PAYMENT_GROUP_ID or PAYMENT_AGENT_ID):
-        update_payload = {"priority": 3}  # High priority
-        if PAYMENT_GROUP_ID:
-            update_payload["group_id"] = PAYMENT_GROUP_ID
-        if PAYMENT_AGENT_ID:
-            update_payload["responder_id"] = PAYMENT_AGENT_ID
-        try:
-            update_freshdesk_ticket(master_id, update_payload)
-            logging.info("✅ Escalated ticket %s: Set high priority and assigned for payment issue", master_id)
-        except Exception as e:
-            logging.exception("❌ Failed escalating ticket: %s", e)
 
     # Build draft note
     note = f"""**🤖 AI Assist (draft)**
 
 **Intent:** {intent}
 **Confidence:** {confidence}
-
 **Sentiment:** {parsed.get('sentiment')}
-
-**Summary:**
-{parsed.get('summary')}
-
-**Draft Reply:**
-{parsed.get('reply_draft')}
-
-**KB Suggestions:**
-{json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
-
+**Summary:** {parsed.get('summary')}
+**Course Details:** {json.dumps(course_details, ensure_ascii=False)}
+**Draft Reply:** {parsed.get('reply_draft')}
+**KB Suggestions:** {json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
 {"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
 """
     try:
@@ -307,5 +275,6 @@ async def freshdesk_webhook(request: Request):
         "intent": intent,
         "confidence": confidence,
         "requester_email": requester_email,
-        "auto_reply": auto_reply_ok
+        "auto_reply": auto_reply_ok,
+        "course_details": course_details
     }
