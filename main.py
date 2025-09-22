@@ -29,7 +29,7 @@ if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
 # Initialize COURSES_DF
 # --------------------------
 try:
-    COURSES_DF = pd.read_csv("fees_and_certificates.xlsx")  # Adjust path if needed
+    COURSES_DF = pd.read_csv("courses.csv")  # Adjust path if needed
     logging.info("✅ Loaded COURSES_DF with %d rows", len(COURSES_DF))
 except Exception as e:
     logging.error("❌ Failed to load COURSES_DF: %s", e)
@@ -64,12 +64,14 @@ def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperatur
 
 
 def get_freshdesk_ticket(ticket_id: int) -> dict | None:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}?include=requester"
     resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
     if resp.status_code != 200:
         logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
         return None
-    return resp.json()
+    ticket_data = resp.json()
+    logging.info("🔍 API ticket response: %s", json.dumps(ticket_data, ensure_ascii=False))
+    return ticket_data
 
 
 def get_master_ticket_id(ticket_id: int) -> int:
@@ -125,6 +127,14 @@ def extract_requester_email(payload: dict) -> str:
     if "from_email" in ticket:
         logging.info("✅ Found email in ticket.from_email")
         return ticket["from_email"].lower()
+    if "email_address" in ticket:
+        logging.info("✅ Found email in ticket.email_address")
+        return ticket["email_address"].lower()
+    if "custom_fields" in ticket and isinstance(ticket["custom_fields"], dict):
+        for key, value in ticket["custom_fields"].items():
+            if "email" in key.lower() and value:
+                logging.info("✅ Found email in ticket.custom_fields.%s", key)
+                return value.lower()
 
     # Fallback for nested structures
     try:
@@ -196,9 +206,19 @@ async def freshdesk_webhook(request: Request):
     if not requester_email:
         logging.warning("⚠️ Requester email missing in payload, attempting API fetch")
         ticket_data = get_freshdesk_ticket(ticket_id)
-        if ticket_data and "requester" in ticket_data and "email" in ticket_data["requester"]:
-            requester_email = ticket_data["requester"]["email"].lower()
-            logging.info("✅ Fetched email from API: %s", requester_email)
+        if ticket_data:
+            # Check requester and custom fields in API response
+            if "requester" in ticket_data and isinstance(ticket_data["requester"], dict) and "email" in ticket_data["requester"]:
+                requester_email = ticket_data["requester"]["email"].lower()
+                logging.info("✅ Fetched email from API: %s", requester_email)
+            elif "custom_fields" in ticket_data and isinstance(ticket_data["custom_fields"], dict):
+                for key, value in ticket_data["custom_fields"].items():
+                    if "email" in key.lower() and value:
+                        requester_email = value.lower()
+                        logging.info("✅ Fetched email from API custom_fields.%s: %s", key, requester_email)
+            else:
+                logging.warning("⚠️ Requester email not found in API response")
+                return {"ok": True, "skipped": True, "reason": "missing requester_email"}
         else:
             logging.warning("⚠️ Requester email not found in API response, skipping auto-reply")
             return {"ok": True, "skipped": True, "reason": "missing requester_email"}
