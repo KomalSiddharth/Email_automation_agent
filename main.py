@@ -316,25 +316,37 @@ async def freshdesk_webhook(request: Request):
         course_details = get_course_details(possible_course)
         logging.info("📚 Course details resolved: %s", json.dumps(course_details))
 
-    # AI classification - Enhanced prompt for exact format and accurate course usage
-    system_prompt = (
-        "You are a customer support assistant for IMK team. Always respond in English only. "
-        "Classify as COURSE_INQUIRY if the query mentions a specific course name like 'Wealth Mastery' or 'Health Mastery'. "
-        "If course details are provided, you MUST use them accurately in the reply_draft—include all fields (fees, link, certificate, notes) without saying 'no info'. "
-        "For course inquiries, set intent to COURSE_INQUIRY and confidence to 0.95. "
-        "Return JSON with: intent (one word: COURSE_INQUIRY, GENERAL, INQUIRY, BILLING), confidence (0-1 float, high for clear matches), summary (2-3 lines), "
-        "sentiment (Angry/Neutral/Positive), reply_draft (MUST follow exact format below, integrate ALL course details if relevant), "
-        "kb_suggestions (list of 3 short titles or URLs).\n"
-        "Exact Reply Draft Format (copy verbatim, replace [CustomerName] with provided name, insert helpful content):\n"
-        "Dear [CustomerName],\n\n"
-        "Thank you for reaching out to us,\n\n"
-        "This is Rahul from team IMK, We are here to help you.........[Insert helpful reply with full course details: name, fees, link, certificate, notes]\n\n"
-        "Thanks & Regards\n"
-        "Rahul\n"
-        "Team IMK\n\n"
-        "[Footer Image: <img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>]\n"
-        "Course details provided: {course_details}. Integrate fully into the helpful reply section if query matches course_name.\n"
-    ).format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
+    # AI classification - Enhanced, organized prompt for exact format and accurate course usage
+    system_prompt = """You are a customer support assistant for IMK team. Always respond in English only.
+
+Classification Rules:
+- Classify as COURSE_INQUIRY if the query mentions a specific course name like 'Wealth Mastery' or 'Health Mastery'.
+- If course details are provided, you MUST use them accurately in the reply_draft—include all fields (fees, link, certificate, notes) without saying 'no info'.
+- For course inquiries, set intent to COURSE_INQUIRY and confidence to 0.95.
+
+Output Format:
+Return valid JSON only with these keys:
+- intent (one word: COURSE_INQUIRY, GENERAL, INQUIRY, BILLING)
+- confidence (0-1 float, high for clear matches)
+- summary (2-3 lines)
+- sentiment (Angry/Neutral/Positive)
+- reply_draft (MUST follow exact format below, integrate ALL course details if relevant)
+- kb_suggestions (list of 3 short titles or URLs)
+
+Exact Reply Draft Format (copy verbatim, replace [CustomerName] with provided name, insert helpful content):
+Dear [CustomerName],
+
+Thank you for reaching out to us,
+
+This is Rahul from team IMK, We are here to help you.........[Insert helpful reply with full course details: name, fees, link, certificate, notes]
+
+Thanks & Regards
+Rahul
+Team IMK
+
+<img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>
+
+Course details provided: {course_details}. Integrate fully into the helpful reply section if query matches course_name.""" .format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
     user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nReturn valid JSON only."
 
     try:
@@ -376,6 +388,7 @@ async def freshdesk_webhook(request: Request):
 **KB Suggestions:** {json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
 {"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
 """
+    logging.info("📝 Generated draft note content: %s", note)
     try:
         post_freshdesk_note(master_id, note, private=True)
         logging.info("✅ Posted private draft to ticket %s", master_id)
@@ -389,8 +402,9 @@ async def freshdesk_webhook(request: Request):
     if auto_reply_ok:
         try:
             reply_body = parsed.get("reply_draft", f"Dear {customer_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you.........Thank you for your inquiry. Our team will assist shortly.\n\nThanks & Regards\nRahul\nTeam IMK\n\n<img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>")
+            logging.info("📤 Generated auto-reply body: %s", reply_body)
             post_freshdesk_reply(master_id, reply_body)
-            logging.info("📤 Outgoing auto-reply body preview: %s", reply_body[:200] + "..." if len(reply_body) > 200 else reply_body)
+            logging.info("✅ Sent auto-reply to ticket %s", master_id)
         except Exception as e:
             logging.exception("❌ Failed posting auto-reply: %s", e)
     else:
