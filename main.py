@@ -5,7 +5,7 @@ import requests
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 import pandas as pd
-import re  # Added for improved course extraction
+import re  # For improved course extraction
 
 # --------------------------
 # Load Environment Variables
@@ -18,7 +18,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
-ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "true").lower() == "true"
+ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "false").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
 TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
@@ -32,14 +32,21 @@ if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
 COURSES_FILE = "fees_and_certificates.xlsx"
 if os.path.exists(COURSES_FILE):
     try:
-        COURSES_DF = pd.read_csv(COURSES_FILE)  # Adjust path if needed
-        logging.info("✅ Loaded COURSES_DF with %d rows", len(COURSES_DF))
+        COURSES_DF = pd.read_csv(COURSES_FILE, encoding='utf-8')  # Try standard UTF-8 first
+        logging.info("✅ Loaded COURSES_DF with %d rows (UTF-8)", len(COURSES_DF))
+    except UnicodeDecodeError:
+        try:
+            COURSES_DF = pd.read_csv(COURSES_FILE, encoding='latin1')  # Fallback for Windows/CP1252
+            logging.info("✅ Loaded COURSES_DF with %d rows (latin1 fallback)", len(COURSES_DF))
+        except Exception as e:
+            logging.error("❌ Failed to load COURSES_DF with fallback: %s", e)
+            COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Empty fallback
     except Exception as e:
         logging.error("❌ Failed to load COURSES_DF: %s", e)
-        COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Fallback empty DataFrame
+        COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Empty fallback
 else:
     logging.info("ℹ️ courses.csv not found, using empty DataFrame")
-    COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Fallback empty DataFrame
+    COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Empty fallback
 
 # --------------------------
 # App & Logging
@@ -148,9 +155,9 @@ def extract_requester_email(payload: dict) -> str:
         logging.info("✅ Found email in nested ticket.requester.email")
         return email
     except Exception as e:
-        logging.info("ℹ️ Nested email extraction fallback: no direct match, relying on API fetch (%s)", e)
+        logging.info("ℹ️ No direct/nested email found in payload (%s)", e)
 
-    logging.info("ℹ️ No email found in payload directly")
+    logging.info("ℹ️ No email found in payload, relying on API fetch")
     return ""
 
 
