@@ -9,6 +9,16 @@ import re
 import math
 from difflib import get_close_matches
 
+# Configure Logging with File Handler
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("app.log")
+    ]
+)
+
 # Load Environment Variables
 load_dotenv()
 FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
@@ -51,9 +61,8 @@ else:
     logging.info("ℹ️ courses.csv not found, using empty DataFrame")
     COURSES_DF = pd.DataFrame(columns=["Course Name"])
 
-# App & Logging
+# App
 app = FastAPI()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # Helper Functions
 def call_openai(system_prompt: str, user_prompt: str, max_tokens=1000, temperature=0.1) -> dict:
@@ -119,7 +128,7 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
 
 def update_freshdesk_ticket_priority(ticket_id: int, priority: int = 3) -> dict:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
-    payload = {"priority": priority}  # High priority = 3
+    payload = {"priority": priority}
     resp = requests.put(url, auth=(FRESHDESK_API_KEY, "X"), json=payload, timeout=20)
     resp.raise_for_status()
     return resp.json()
@@ -189,7 +198,7 @@ def get_course_details(course_name: str) -> dict:
             })
             logging.info("✅ Fetched full course details for '%s': %s", course_name, json.dumps(course_dict))
             return course_dict
-        logging.warning("⚠️ No matching course found for '%s'. Available: %s", course_name, COURSES_DF['Course Name'].tolist())
+        logging.warning("⚠️ No matching course found for '%s'. Available: %s", course_name, course_names)
         return {"course_name": course_name, "fees": "", "link": "", "certificate": "", "notes": "", "details": "No matching course found in our database. Please check the course name or contact support for more options."}
     except Exception as e:
         logging.exception("❌ Error in get_course_details for %s: %s", course_name, e)
@@ -197,11 +206,18 @@ def get_course_details(course_name: str) -> dict:
 
 def extract_possible_course(subject: str, description: str) -> str:
     patterns = [
-        r"about\s+(.+?)(?:\s+course)?",
-        r"course\s+(.+?)(?:\s+inquiry)?",
-        r"inquiry\s+about\s+(.+)",
-        r"(health|wealth)\s+mastery",
-        r"(.+?)\s+course",
+        r"about\s+(.+?)(?:\s+course)?(?:\s|$)",
+        r"course\s+(.+?)(?:\s+inquiry)?(?:\s|$)",
+        r"inquiry\s+about\s+(.+?)(?:\s|$)",
+        r"(?:health|wealth|relationship)\s+mastery",
+        r"ho['’]oponopono\s+healer\s+certification",
+        r"nlp\s+masterclass",
+        r"loa\s+handwriting\s+frequency",
+        r"platinum\s+membership",
+        r"manifest\s+with\s+chakra",
+        r"daily\s+magic\s+practise\s*\(?\s*dmp\s*\)?",
+        r"advanced\s+law\s+of\s+attraction",
+        r"(.+?)\s+course(?:\s|$)",
     ]
     text = f"{subject} {description}".lower()
     for pattern in patterns:
@@ -210,6 +226,14 @@ def extract_possible_course(subject: str, description: str) -> str:
             extracted = match.group(1).strip().title() if len(match.groups()) > 0 else match.group(0).title()
             logging.info("🔍 Course extraction matched pattern '%s' -> '%s'", pattern, extracted)
             return extracted
+    # Fallback: Check for partial course name matches
+    course_names = COURSES_DF['Course Name'].str.lower().tolist()
+    words = text.split()
+    for word in words:
+        fuzzy_matches = get_close_matches(word, course_names, n=1, cutoff=0.6)
+        if fuzzy_matches:
+            logging.info("🔍 Fallback fuzzy matched '%s' to '%s'", word, fuzzy_matches[0])
+            return fuzzy_matches[0].title()
     logging.info("🔍 No course pattern matched in text: %s", text[:200])
     return ""
 
