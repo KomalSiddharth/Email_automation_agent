@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 import pandas as pd
 
 # --------------------------
-# Load Environment Variables
+# Load Environment VariablesA
 # --------------------------
 load_dotenv()
 
@@ -318,3 +318,4 @@ async def freshdesk_webhook(request: Request):
         "auto_reply": auto_reply_ok,
         "course_details": course_details
     }
+
