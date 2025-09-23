@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 import pandas as pd
 import re  # For improved course extraction
+import math  # For math.isnan check
 
 # --------------------------
 # Load Environment Variables
@@ -32,12 +33,14 @@ if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
 COURSES_FILE = "courses.csv"
 if os.path.exists(COURSES_FILE):
     try:
-        COURSES_DF = pd.read_csv(COURSES_FILE, encoding='utf-8')  # Try standard UTF-8 first
+        COURSES_DF = pd.read_csv(COURSES_FILE, encoding='utf-8', on_bad_lines='warn')  # Warn and skip bad lines
         logging.info("✅ Loaded COURSES_DF with %d rows (UTF-8)", len(COURSES_DF))
+        COURSES_DF = COURSES_DF.fillna('')  # Replace NaN with empty string to prevent JSON issues
     except UnicodeDecodeError:
         try:
-            COURSES_DF = pd.read_csv(COURSES_FILE, encoding='latin1')  # Fallback for Windows/CP1252
+            COURSES_DF = pd.read_csv(COURSES_FILE, encoding='latin1', on_bad_lines='warn')  # Fallback encoding, skip bad lines
             logging.info("✅ Loaded COURSES_DF with %d rows (latin1 fallback)", len(COURSES_DF))
+            COURSES_DF = COURSES_DF.fillna('')  # Replace NaN with empty string
         except Exception as e:
             logging.error("❌ Failed to load COURSES_DF with fallback: %s", e)
             COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Empty fallback
@@ -75,7 +78,6 @@ def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperatur
     response.raise_for_status()
     return response.json()
 
-
 def get_freshdesk_ticket(ticket_id: int) -> dict | None:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}?include=requester"
     resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
@@ -85,7 +87,6 @@ def get_freshdesk_ticket(ticket_id: int) -> dict | None:
     ticket_data = resp.json()
     logging.info("🔍 API ticket response: %s", json.dumps(ticket_data, ensure_ascii=False))
     return ticket_data
-
 
 def get_master_ticket_id(ticket_id: int) -> int:
     ticket = get_freshdesk_ticket(ticket_id)
@@ -97,20 +98,17 @@ def get_master_ticket_id(ticket_id: int) -> int:
         return parent_id
     return ticket_id
 
-
 def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
     resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
     resp.raise_for_status()
     return resp.json()
 
-
 def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/reply"
     resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body}, timeout=20)
     resp.raise_for_status()
     return resp.json()
-
 
 def extract_requester_email(payload: dict) -> str:
     """
@@ -160,7 +158,6 @@ def extract_requester_email(payload: dict) -> str:
     logging.info("ℹ️ No email found in payload, relying on API fetch")
     return ""
 
-
 def get_course_details(course_name: str) -> dict:
     """
     Fetch course details from COURSES_DF based on course_name
@@ -179,7 +176,6 @@ def get_course_details(course_name: str) -> dict:
         logging.exception("❌ Error in get_course_details for %s: %s", course_name, e)
         return {"course_name": course_name, "details": f"Error: {str(e)}"}
 
-
 def extract_possible_course(subject: str, description: str) -> str:
     """
     Improved extraction: Scan subject and description for course names (e.g., after 'about', 'course', or standalone).
@@ -196,6 +192,16 @@ def extract_possible_course(subject: str, description: str) -> str:
             return match.group(1).strip().title()  # Capitalize for matching
     return ""  # No match
 
+def sanitize_dict(d: dict) -> dict:
+    """Recursively replace NaN with None in dict to make JSON compliant."""
+    for k, v in list(d.items()):
+        if isinstance(v, dict):
+            d[k] = sanitize_dict(v)
+        elif isinstance(v, float) and math.isnan(v):
+            d[k] = None
+        elif isinstance(v, list):
+            d[k] = [sanitize_dict(item) if isinstance(item, dict) else item for item in v]
+    return d
 
 # --------------------------
 # Routes
@@ -204,11 +210,9 @@ def extract_possible_course(subject: str, description: str) -> str:
 def root():
     return {"message": "AI Email Automation Backend Running"}
 
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 
 @app.post("/freshdesk-webhook")
 async def freshdesk_webhook(request: Request):
@@ -306,6 +310,8 @@ async def freshdesk_webhook(request: Request):
 
     intent = parsed.get("intent", "UNKNOWN").upper()
     confidence = parsed.get("confidence", 0.0)
+    if math.isnan(confidence):
+        confidence = 0.0  # Safeguard against NaN
     is_payment_issue = intent in ["BILLING", "PAYMENT"]
 
     # Build draft note
@@ -337,7 +343,7 @@ async def freshdesk_webhook(request: Request):
     else:
         logging.info("ℹ️ Auto-reply skipped (intent/setting)")
 
-    return {
+    response_data = {
         "ok": True,
         "ticket": ticket_id,
         "master_ticket": master_id,
@@ -347,4 +353,4 @@ async def freshdesk_webhook(request: Request):
         "auto_reply": auto_reply_ok,
         "course_details": course_details
     }
-
+    return sanitize_dict(response_data)
