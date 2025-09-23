@@ -1,4 +1,3 @@
-```python
 import os
 import json
 import logging
@@ -10,11 +9,8 @@ import re
 import math
 from difflib import get_close_matches
 
-# --------------------------
 # Load Environment Variables
-# --------------------------
 load_dotenv()
-
 FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
 FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -29,9 +25,7 @@ TEST_EMAIL = "komalsiddharth814@gmail.com"
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
 
-# --------------------------
 # Initialize COURSES_DF
-# --------------------------
 COURSES_FILE = "courses.csv"
 if os.path.exists(COURSES_FILE):
     try:
@@ -57,15 +51,11 @@ else:
     logging.info("ℹ️ courses.csv not found, using empty DataFrame")
     COURSES_DF = pd.DataFrame(columns=["Course Name"])
 
-# --------------------------
 # App & Logging
-# --------------------------
 app = FastAPI()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# --------------------------
 # Helper Functions
-# --------------------------
 def call_openai(system_prompt: str, user_prompt: str, max_tokens=1000, temperature=0.1) -> dict:
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -127,6 +117,13 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
     resp.raise_for_status()
     return resp.json()
 
+def update_freshdesk_ticket_priority(ticket_id: int, priority: int = 3) -> dict:
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
+    payload = {"priority": priority}  # High priority = 3
+    resp = requests.put(url, auth=(FRESHDESK_API_KEY, "X"), json=payload, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
 def extract_requester_email(payload: dict) -> str:
     logging.info("🔍 Full payload for email extraction: %s", json.dumps(payload, ensure_ascii=False, indent=2))
     ticket = payload.get("ticket") or payload
@@ -175,10 +172,8 @@ def get_course_details(course_name: str) -> dict:
         return {"course_name": course_name, "fees": "", "link": "", "certificate": "", "notes": "", "details": "No matching course found"}
 
     try:
-        # Strict exact match first
         matched = COURSES_DF[COURSES_DF['Course Name'].str.lower() == course_name.lower().strip()]
         if matched.empty:
-            # Fuzzy match with difflib for variants (e.g., "Wealth Mastery" vs "WealthMastery")
             course_names = COURSES_DF['Course Name'].str.lower().tolist()
             fuzzy_matches = get_close_matches(course_name.lower().strip(), course_names, n=1, cutoff=0.6)
             if fuzzy_matches:
@@ -228,9 +223,7 @@ def sanitize_dict(d: dict) -> dict:
             d[k] = [sanitize_dict(item) if isinstance(item, dict) else item for item in v]
     return d
 
-# --------------------------
 # Routes
-# --------------------------
 @app.get("/")
 def root():
     return {"message": "AI Email Automation Backend Running"}
@@ -313,6 +306,7 @@ async def freshdesk_webhook(request: Request):
 - Classify as COURSE_INQUIRY if the query mentions a specific course name (e.g., 'Wealth Mastery', 'Health Mastery').
 - If course details are provided, you MUST include ALL fields (Course Name, Course Fees, Course Link, Course_Certificate, Notes) in the reply_draft as bullet points in {{message_body}}. Do NOT say 'no info' if details exist.
 - For course inquiries, set intent to COURSE_INQUIRY and confidence to 0.95.
+- For payment-related queries (e.g., billing, payment issues), set intent to BILLING, confidence to 0.90, and include a note in {{message_body}} about escalating to the billing team.
 
 === OUTPUT FORMAT ===
 Return valid JSON only with these keys:
@@ -324,7 +318,7 @@ Return valid JSON only with these keys:
 - kb_suggestions (list of 3 short titles or URLs)
 
 === EXACT REPLY DRAFT FORMAT ===
-Copy verbatim, replace {{customer_name}} with provided name, insert course details in {{message_body}} as bullet points (e.g., '<li>Course Name: Wealth Mastery</li><li>Fees: Rs. 15000</li>'):
+Copy verbatim, replace {{customer_name}} with provided name, insert course details as bullet points in {{message_body}} (e.g., '<li>Course Name: Wealth Mastery</li><li>Fees: Rs. 15000</li>'):
 
 Hi {{customer_name}},<br><br>
 Thank you for reaching out to us,<br><br>
@@ -335,9 +329,9 @@ Our team is happy to help!<br><br>
 Thanks & Regards,<br>
 Rahul<br>
 Team IMK<br>
-<img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'><br>
+<img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'><br>
 
-Course details provided: {course_details}. Integrate ALL fields as bullet points in {{message_body}} if query matches course_name (e.g., '<li>Course Name: Wealth Mastery</li><li>Fees: Rs. 15000</li><li>Link: https://miteshkhatri.com/JoinALOA</li><li>Certificate: No</li><li>Notes: None</li>').""".format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
+Course details provided: {course_details}. Integrate ALL fields as bullet points in {{message_body}} if query matches course_name (e.g., '<li>Course Name: Wealth Mastery</li><li>Fees: Rs. 15000</li><li>Link: https://miteshkhatri.com/JoinALOA</li><li>Certificate: No</li><li>Notes: None</li>'). For BILLING, include: 'Your query has been escalated to our billing team for prompt resolution.'""".format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
     user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nReturn valid JSON only."
 
     try:
@@ -385,20 +379,27 @@ Course details provided: {course_details}. Integrate ALL fields as bullet points
     except Exception as e:
         logging.exception("❌ Failed posting note: %s", e)
 
-    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
-    logging.info("📤 Auto-reply check: Enabled=%s, Safe Intent=%s, Confidence OK=%s, Payment=%s -> OK=%s", 
-                 ENABLE_AUTO_REPLY, intent in SAFE_INTENTS, confidence >= AUTO_REPLY_CONFIDENCE, is_payment_issue, auto_reply_ok)
-    if auto_reply_ok:
+    if is_payment_issue:
         try:
-            reply_body = parsed.get("reply_draft", f"Hi {customer_name},<br><br>Thank you for reaching out to us,<br><br>This is Rahul from Team IMK, we are here to help you.<br><br>Thank you for your inquiry. Our team will assist shortly.<br><br>If you have any course-related technical questions, please email us at contact@miteshkhatri.com.<br>Our team is happy to help!<br><br>Thanks & Regards,<br>Rahul<br>Team IMK<br><img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>")
-            logging.info("📤 Outgoing auto-reply body: %s", reply_body)
-            post_freshdesk_reply(master_id, reply_body)
-            logging.info("✅ Sent auto-reply to ticket %s", master_id)
+            update_freshdesk_ticket_priority(master_id, priority=3)
+            logging.info("✅ Set ticket %s to high priority (billing issue)", master_id)
         except Exception as e:
-            logging.exception("❌ Failed posting auto-reply: %s", e)
+            logging.exception("❌ Failed to set ticket priority: %s", e)
     else:
-        logging.info("ℹ️ Auto-reply skipped for ticket %s (intent: %s, confidence: %.2f, payment: %s)", 
-                     master_id, intent, confidence, is_payment_issue)
+        auto_reply_ok = ENABLE_AUTO_REPLY and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+        logging.info("📤 Auto-reply check: Enabled=%s, Safe Intent=%s, Confidence OK=%s, Payment=%s -> OK=%s", 
+                     ENABLE_AUTO_REPLY, intent in SAFE_INTENTS, confidence >= AUTO_REPLY_CONFIDENCE, is_payment_issue, auto_reply_ok)
+        if auto_reply_ok:
+            try:
+                reply_body = parsed.get("reply_draft", f"Hi {customer_name},<br><br>Thank you for reaching out to us,<br><br>This is Rahul from Team IMK, we are here to help you.<br><br>Thank you for your inquiry. Our team will assist shortly.<br><br>If you have any course-related technical questions, please email us at contact@miteshkhatri.com.<br>Our team is happy to help!<br><br>Thanks & Regards,<br>Rahul<br>Team IMK<br><img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>")
+                logging.info("📤 Outgoing auto-reply body: %s", reply_body)
+                post_freshdesk_reply(master_id, reply_body)
+                logging.info("✅ Sent auto-reply to ticket %s", master_id)
+            except Exception as e:
+                logging.exception("❌ Failed posting auto-reply: %s", e)
+        else:
+            logging.info("ℹ️ Auto-reply skipped for ticket %s (intent: %s, confidence: %.2f, payment: %s)", 
+                         master_id, intent, confidence, is_payment_issue)
 
     response_data = {
         "ok": True,
@@ -407,10 +408,9 @@ Course details provided: {course_details}. Integrate ALL fields as bullet points
         "intent": intent,
         "confidence": confidence,
         "requester_email": requester_email,
-        "auto_reply": auto_reply_ok,
+        "auto_reply": not is_payment_issue and auto_reply_ok,
         "course_details": course_details,
         "possible_course": possible_course,
         "customer_name": customer_name
     }
     return sanitize_dict(response_data)
-```
