@@ -29,7 +29,7 @@ if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
 # --------------------------
 # Initialize COURSES_DF
 # --------------------------
-COURSES_FILE = "fees_and_certificates.xlsx"
+COURSES_FILE = "courses.csv"
 if os.path.exists(COURSES_FILE):
     try:
         COURSES_DF = pd.read_csv(COURSES_FILE, encoding='utf-8')  # Try standard UTF-8 first
