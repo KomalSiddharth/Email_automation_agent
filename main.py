@@ -5,9 +5,10 @@ import requests
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 import pandas as pd
+import re  # Added for improved course extraction
 
 # --------------------------
-# Load Environment VariablesA
+# Load Environment Variables
 # --------------------------
 load_dotenv()
 
@@ -17,7 +18,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
-ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "false").lower() == "true"
+ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "true").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
 TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
@@ -28,11 +29,16 @@ if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
 # --------------------------
 # Initialize COURSES_DF
 # --------------------------
-try:
-    COURSES_DF = pd.read_csv("fees_and_certificates.xlsx")  # Adjust path if needed
-    logging.info("✅ Loaded COURSES_DF with %d rows", len(COURSES_DF))
-except Exception as e:
-    logging.error("❌ Failed to load COURSES_DF: %s", e)
+COURSES_FILE = "fees_and_certificates.xlsx"
+if os.path.exists(COURSES_FILE):
+    try:
+        COURSES_DF = pd.read_csv(COURSES_FILE)  # Adjust path if needed
+        logging.info("✅ Loaded COURSES_DF with %d rows", len(COURSES_DF))
+    except Exception as e:
+        logging.error("❌ Failed to load COURSES_DF: %s", e)
+        COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Fallback empty DataFrame
+else:
+    logging.info("ℹ️ courses.csv not found, using empty DataFrame")
     COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Fallback empty DataFrame
 
 # --------------------------
@@ -41,7 +47,7 @@ except Exception as e:
 app = FastAPI()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# -------------------------- 
+# --------------------------
 # Helper Functions
 # --------------------------
 def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperature=0.0) -> dict:
@@ -142,9 +148,9 @@ def extract_requester_email(payload: dict) -> str:
         logging.info("✅ Found email in nested ticket.requester.email")
         return email
     except Exception as e:
-        logging.warning("⚠️ Nested email extraction failed: %s", e)
+        logging.info("ℹ️ Nested email extraction fallback: no direct match, relying on API fetch (%s)", e)
 
-    logging.warning("⚠️ No email found in payload")
+    logging.info("ℹ️ No email found in payload directly")
     return ""
 
 
@@ -153,7 +159,7 @@ def get_course_details(course_name: str) -> dict:
     Fetch course details from COURSES_DF based on course_name
     """
     if not course_name or not isinstance(course_name, str):
-        logging.warning("⚠️ Invalid or empty course_name: %s", course_name)
+        logging.info("ℹ️ Invalid or empty course_name: %s", course_name)
         return {"course_name": course_name, "details": "No matching course found"}
 
     try:
@@ -167,7 +173,24 @@ def get_course_details(course_name: str) -> dict:
         return {"course_name": course_name, "details": f"Error: {str(e)}"}
 
 
-# -------------------------- 
+def extract_possible_course(subject: str, description: str) -> str:
+    """
+    Improved extraction: Scan subject and description for course names (e.g., after 'about', 'course', or standalone).
+    """
+    patterns = [
+        r"about\s+(.+?)(?:\s+course)?",  # e.g., "about Python Basics"
+        r"course\s+(.+?)(?:\s+inquiry)?",  # e.g., "course Python Basics"
+        r"inquiry\s+about\s+(.+)",  # e.g., "inquiry about AI Fundamentals"
+    ]
+    text = f"{subject} {description}".lower()
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1).strip().title()  # Capitalize for matching
+    return ""  # No match
+
+
+# --------------------------
 # Routes
 # --------------------------
 @app.get("/")
@@ -204,7 +227,7 @@ async def freshdesk_webhook(request: Request):
         return {"ok": False, "error": "ticket id not found"}
 
     if not requester_email:
-        logging.warning("⚠️ Requester email missing in payload, attempting API fetch")
+        logging.info("ℹ️ Requester email missing in payload, attempting API fetch")
         ticket_data = get_freshdesk_ticket(ticket_id)
         if ticket_data:
             # Check requester and custom fields in API response
@@ -217,10 +240,10 @@ async def freshdesk_webhook(request: Request):
                         requester_email = value.lower()
                         logging.info("✅ Fetched email from API custom_fields.%s: %s", key, requester_email)
             else:
-                logging.warning("⚠️ Requester email not found in API response")
+                logging.info("ℹ️ Requester email not found in API response")
                 return {"ok": True, "skipped": True, "reason": "missing requester_email"}
         else:
-            logging.warning("⚠️ Requester email not found in API response, skipping auto-reply")
+            logging.info("ℹ️ Requester email not found in API response, skipping auto-reply")
             return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
     if requester_email.lower() != TEST_EMAIL.lower():
@@ -235,12 +258,11 @@ async def freshdesk_webhook(request: Request):
         logging.exception("❌ Failed to get master ticket id: %s", e)
         master_id = ticket_id
 
-    # Extract possible course (placeholder logic; replace with your actual logic)
-    possible_course = subject.split("about")[-1].strip() if "about" in subject.lower() else ""
+    # Extract possible course (improved to scan description too)
+    possible_course = extract_possible_course(subject, description)
     logging.info("🔍 Extracted possible_course: %s", possible_course)
-    possible_course = possible_course or ""
-    if not possible_course.strip():
-        logging.warning("⚠️ No valid course name extracted from ticket %s", ticket_id)
+    if not possible_course:
+        logging.info("ℹ️ No valid course name extracted from ticket %s", ticket_id)
         course_details = {"course_name": "", "details": "No course specified"}
     else:
         course_details = get_course_details(possible_course)
@@ -256,7 +278,7 @@ async def freshdesk_webhook(request: Request):
         "Dear [CustomerName],\n\n"
         "[Helpful AI reply]\n\n"
         "Best regards,\nSupport Team"
-    ).format(course_details=json.dumps(course_details))
+    ).format(course_details=json.dumps(course_details) if possible_course else "")
     user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nReturn valid JSON only."
 
     try:
@@ -318,5 +340,3 @@ async def freshdesk_webhook(request: Request):
         "auto_reply": auto_reply_ok,
         "course_details": course_details
     }
-
-
