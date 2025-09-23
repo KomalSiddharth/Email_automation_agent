@@ -64,7 +64,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # --------------------------
 # Helper Functions
 # --------------------------
-def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperature=0.0) -> dict:
+def call_openai(system_prompt: str, user_prompt: str, max_tokens=800, temperature=0.1) -> dict:
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
@@ -89,8 +89,20 @@ def get_freshdesk_ticket(ticket_id: int) -> dict | None:
         logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
         return None
     ticket_data = resp.json()
-    logging.info("🔍 API ticket response: %s", json.dumps(ticket_data, ensure_ascii=False))
+    logging.info("🔍 API ticket response keys: %s", list(ticket_data.keys()))
+    if 'requester' in ticket_data:
+        logging.info("🔍 Requester details: %s", json.dumps(ticket_data['requester'], ensure_ascii=False))
     return ticket_data
+
+def get_customer_name(ticket_data: dict) -> str:
+    """Extract customer name from ticket data"""
+    if 'requester' in ticket_data and isinstance(ticket_data['requester'], dict):
+        contact = ticket_data['requester'].get('contact', {})
+        name = contact.get('name', 'Customer')
+        logging.info("👤 Extracted customer name: %s", name)
+        return name
+    logging.warning("⚠️ No customer name found, using 'Customer'")
+    return "Customer"
 
 def get_master_ticket_id(ticket_id: int) -> int:
     ticket = get_freshdesk_ticket(ticket_id)
@@ -236,6 +248,7 @@ async def freshdesk_webhook(request: Request):
         payload = await request.json()
         logging.info("📩 Incoming Freshdesk payload received: ticket_id=%s, subject='%s'", 
                      payload.get("ticket", {}).get("id", "N/A"), payload.get("ticket", {}).get("subject", "N/A"))
+        logging.info("📥 Full incoming payload: %s", json.dumps(payload, ensure_ascii=False, indent=2))
     except Exception as e:
         logging.exception("❌ Failed to parse JSON payload: %s", e)
         return {"ok": False, "error": "invalid JSON"}
@@ -289,6 +302,10 @@ async def freshdesk_webhook(request: Request):
         logging.exception("❌ Failed to get master ticket id: %s", e)
         master_id = ticket_id
 
+    # Fetch full ticket data for customer name
+    ticket_data = get_freshdesk_ticket(master_id)
+    customer_name = get_customer_name(ticket_data) if ticket_data else "Customer"
+
     # Extract possible course (improved to scan description too)
     possible_course = extract_possible_course(subject, description)
     logging.info("🔍 Extracted possible_course: '%s'", possible_course)
@@ -299,22 +316,26 @@ async def freshdesk_webhook(request: Request):
         course_details = get_course_details(possible_course)
         logging.info("📚 Course details resolved: %s", json.dumps(course_details))
 
-    # AI classification - Improved prompt to enforce COURSE_INQUIRY for course queries and use details
+    # AI classification - Enhanced prompt for exact format and accurate course usage
     system_prompt = (
-        "You are a customer support assistant. Always respond in English only. "
-        "Classify as COURSE_INQUIRY if the query mentions a specific course name. "
-        "If course details are provided, you MUST use them accurately in the reply_draft—do not say 'no info' if details exist. "
-        "For course inquiries, set intent to COURSE_INQUIRY and confidence to 0.95+ if match is clear. "
+        "You are a customer support assistant for IMK team. Always respond in English only. "
+        "Classify as COURSE_INQUIRY if the query mentions a specific course name like 'Wealth Mastery' or 'Health Mastery'. "
+        "If course details are provided, you MUST use them accurately in the reply_draft—include all fields (fees, link, certificate, notes) without saying 'no info'. "
+        "For course inquiries, set intent to COURSE_INQUIRY and confidence to 0.95. "
         "Return JSON with: intent (one word: COURSE_INQUIRY, GENERAL, INQUIRY, BILLING), confidence (0-1 float, high for clear matches), summary (2-3 lines), "
-        "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template, include ALL course details if relevant), "
+        "sentiment (Angry/Neutral/Positive), reply_draft (MUST follow exact format below, integrate ALL course details if relevant), "
         "kb_suggestions (list of 3 short titles or URLs).\n"
-        "Course details provided: {course_details}. Integrate fully into reply_draft if query matches course_name.\n"
-        "Reply template:\n"
+        "Exact Reply Draft Format (copy verbatim, replace [CustomerName] with provided name, insert helpful content):\n"
         "Dear [CustomerName],\n\n"
-        "[Helpful AI reply with accurate course info, duration, fees, link, certificate if applicable]\n\n"
-        "Best regards,\nSupport Team"
+        "Thank you for reaching out to us,\n\n"
+        "This is Rahul from team IMK, We are here to help you.........[Insert helpful reply with full course details: name, fees, link, certificate, notes]\n\n"
+        "Thanks & Regards\n"
+        "Rahul\n"
+        "Team IMK\n\n"
+        "[Footer Image: <img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>]\n"
+        "Course details provided: {course_details}. Integrate fully into the helpful reply section if query matches course_name.\n"
     ).format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
-    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nReturn valid JSON only."
+    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nReturn valid JSON only."
 
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
@@ -329,7 +350,7 @@ async def freshdesk_webhook(request: Request):
             "confidence": 0.0,
             "summary": description[:200],
             "sentiment": "UNKNOWN",
-            "reply_draft": "AI parsing failed. Please review manually.",
+            "reply_draft": f"Dear {customer_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you.........AI parsing failed. Please review manually.\n\nThanks & Regards\nRahul\nTeam IMK\n\n<img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>",
             "kb_suggestions": []
         }
 
@@ -344,6 +365,7 @@ async def freshdesk_webhook(request: Request):
     note = f"""**🤖 AI Assist (draft)**
 
 **Ticket ID:** {ticket_id} | **Master ID:** {master_id}
+**Customer:** {customer_name} | **Email:** {requester_email}
 **Intent:** {intent}
 **Confidence:** {confidence}
 **Sentiment:** {parsed.get('sentiment')}
@@ -366,9 +388,9 @@ async def freshdesk_webhook(request: Request):
                  ENABLE_AUTO_REPLY, intent in SAFE_INTENTS, confidence >= AUTO_REPLY_CONFIDENCE, is_payment_issue, auto_reply_ok)
     if auto_reply_ok:
         try:
-            reply_body = parsed.get("reply_draft", "Thank you for your inquiry. Our team will assist shortly. Best regards, Support Team")
+            reply_body = parsed.get("reply_draft", f"Dear {customer_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you.........Thank you for your inquiry. Our team will assist shortly.\n\nThanks & Regards\nRahul\nTeam IMK\n\n<img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>")
             post_freshdesk_reply(master_id, reply_body)
-            logging.info("✅ Auto-replied to ticket %s with body: %s", master_id, reply_body[:100] + "..." if len(reply_body) > 100 else reply_body)
+            logging.info("📤 Outgoing auto-reply body preview: %s", reply_body[:200] + "..." if len(reply_body) > 200 else reply_body)
         except Exception as e:
             logging.exception("❌ Failed posting auto-reply: %s", e)
     else:
@@ -384,6 +406,7 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok,
         "course_details": course_details,
-        "possible_course": possible_course
+        "possible_course": possible_course,
+        "customer_name": customer_name
     }
     return sanitize_dict(response_data)
