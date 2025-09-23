@@ -19,9 +19,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
-ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "true").lower() == "true"
-AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
-SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
+ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "true").lower() == "true"  # Default to true for testing
+AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.80"))  # Lowered to 0.8 for testing
+SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL,INQUIRY").split(",")]  # Added INQUIRY
 TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
@@ -36,11 +36,15 @@ if os.path.exists(COURSES_FILE):
         COURSES_DF = pd.read_csv(COURSES_FILE, encoding='utf-8', on_bad_lines='warn')  # Warn and skip bad lines
         logging.info("✅ Loaded COURSES_DF with %d rows (UTF-8)", len(COURSES_DF))
         COURSES_DF = COURSES_DF.fillna('')  # Replace NaN with empty string to prevent JSON issues
+        logging.info("📊 COURSES_DF columns: %s", COURSES_DF.columns.tolist())
+        logging.info("📊 Sample courses: %s", COURSES_DF['Course Name'].head().tolist())
     except UnicodeDecodeError:
         try:
             COURSES_DF = pd.read_csv(COURSES_FILE, encoding='latin1', on_bad_lines='warn')  # Fallback encoding, skip bad lines
             logging.info("✅ Loaded COURSES_DF with %d rows (latin1 fallback)", len(COURSES_DF))
             COURSES_DF = COURSES_DF.fillna('')  # Replace NaN with empty string
+            logging.info("📊 COURSES_DF columns: %s", COURSES_DF.columns.tolist())
+            logging.info("📊 Sample courses: %s", COURSES_DF['Course Name'].head().tolist())
         except Exception as e:
             logging.error("❌ Failed to load COURSES_DF with fallback: %s", e)
             COURSES_DF = pd.DataFrame(columns=["Course Name"])  # Empty fallback
@@ -95,7 +99,7 @@ def get_master_ticket_id(ticket_id: int) -> int:
     parent_id = ticket.get("merged_ticket_id") or ticket.get("custom_fields", {}).get("cf_parent_ticket_id")
     if parent_id:
         logging.info("🔀 Ticket %s merged into %s", ticket_id, parent_id)
-        return parent_id
+        return get_master_ticket_id(parent_id)  # Recursive to handle deep merges
     return ticket_id
 
 def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
@@ -115,9 +119,9 @@ def extract_requester_email(payload: dict) -> str:
     Robust extraction of requester email from payload
     Handles different Freshdesk webhook structures
     """
-    logging.info("🔍 Payload for email extraction: %s", json.dumps(payload, ensure_ascii=False))
+    logging.info("🔍 Full payload for email extraction: %s", json.dumps(payload, ensure_ascii=False, indent=2))
     ticket = payload.get("ticket") or payload
-    logging.info("🔍 Ticket dictionary: %s", json.dumps(ticket, ensure_ascii=False))
+    logging.info("🔍 Ticket dictionary: %s", json.dumps(ticket, ensure_ascii=False, indent=2))
 
     # Direct checks
     if "requester" in ticket and isinstance(ticket["requester"], dict) and "email" in ticket["requester"]:
@@ -160,21 +164,28 @@ def extract_requester_email(payload: dict) -> str:
 
 def get_course_details(course_name: str) -> dict:
     """
-    Fetch course details from COURSES_DF based on course_name
+    Fetch course details from COURSES_DF based on course_name - Improved fuzzy matching
     """
     if not course_name or not isinstance(course_name, str):
         logging.info("ℹ️ Invalid or empty course_name: %s", course_name)
         return {"course_name": course_name, "details": "No matching course found"}
 
     try:
-        # Use regex=False to treat course_name as a literal string
-        matched = COURSES_DF[COURSES_DF['Course Name'].str.contains(course_name, case=False, na=False, regex=False)]
+        # Normalize and search for exact or partial match (case-insensitive)
+        norm_course = course_name.lower().strip()
+        matched = COURSES_DF[COURSES_DF['Course Name'].str.lower().str.contains(norm_course, na=False, case=False)]
+        if matched.empty:
+            # Try exact match if partial fails
+            matched = COURSES_DF[COURSES_DF['Course Name'].str.lower() == norm_course]
         if not matched.empty:
-            return matched.iloc[0].to_dict()
-        return {"course_name": course_name, "details": "No matching course found"}
+            course_dict = matched.iloc[0].to_dict()
+            logging.info("✅ Found course details for '%s': %s", course_name, json.dumps(course_dict))
+            return course_dict
+        logging.warning("⚠️ No matching course found for '%s' in CSV. Available courses: %s", course_name, COURSES_DF['Course Name'].tolist())
+        return {"course_name": course_name, "details": "No matching course found in our database. Please check the course name or contact support for more options."}
     except Exception as e:
         logging.exception("❌ Error in get_course_details for %s: %s", course_name, e)
-        return {"course_name": course_name, "details": f"Error: {str(e)}"}
+        return {"course_name": course_name, "details": f"Error retrieving details: {str(e)}"}
 
 def extract_possible_course(subject: str, description: str) -> str:
     """
@@ -184,12 +195,17 @@ def extract_possible_course(subject: str, description: str) -> str:
         r"about\s+(.+?)(?:\s+course)?",  # e.g., "about Python Basics"
         r"course\s+(.+?)(?:\s+inquiry)?",  # e.g., "course Python Basics"
         r"inquiry\s+about\s+(.+)",  # e.g., "inquiry about AI Fundamentals"
+        r"(health|wealth)\s+mastery",  # Specific for "Health/Wealth Mastery"
+        r"(.+?)\s+course",  # General course name
     ]
     text = f"{subject} {description}".lower()
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            return match.group(1).strip().title()  # Capitalize for matching
+            extracted = match.group(1).strip().title() if len(match.groups()) > 0 else match.group(0).title()
+            logging.info("🔍 Course extraction matched pattern '%s' -> '%s'", pattern, extracted)
+            return extracted
+    logging.info("🔍 No course pattern matched in text: %s", text[:200])
     return ""  # No match
 
 def sanitize_dict(d: dict) -> dict:
@@ -218,7 +234,8 @@ def health():
 async def freshdesk_webhook(request: Request):
     try:
         payload = await request.json()
-        logging.info("📩 Incoming Freshdesk payload: %s", payload)
+        logging.info("📩 Incoming Freshdesk payload received: ticket_id=%s, subject='%s'", 
+                     payload.get("ticket", {}).get("id", "N/A"), payload.get("ticket", {}).get("subject", "N/A"))
     except Exception as e:
         logging.exception("❌ Failed to parse JSON payload: %s", e)
         return {"ok": False, "error": "invalid JSON"}
@@ -228,6 +245,7 @@ async def freshdesk_webhook(request: Request):
     ticket_id = ticket.get("id") or payload.get("id")
     subject = ticket.get("subject", "")
     description = ticket.get("description", "")
+    logging.info("🔹 Processing ticket %s: Subject='%s', Description preview='%s'", ticket_id, subject, description[:100])
 
     # Extract requester email robustly
     requester_email = extract_requester_email(payload)
@@ -258,38 +276,44 @@ async def freshdesk_webhook(request: Request):
             return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
     if requester_email.lower() != TEST_EMAIL.lower():
-        logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
+        logging.info("⏭️ Ignored ticket %s from %s (not test email)", ticket_id, requester_email)
         return {"ok": True, "skipped": True}
 
-    # Get master ticket ID
+    logging.info("✅ Processing test ticket %s from %s", ticket_id, requester_email)
+
+    # Get master ticket ID (handles replies/threads)
     try:
         master_id = get_master_ticket_id(ticket_id)
-        logging.info("🔀 Master ticket id: %s", master_id)
+        logging.info("🔀 Master ticket id: %s (original: %s)", master_id, ticket_id)
     except Exception as e:
         logging.exception("❌ Failed to get master ticket id: %s", e)
         master_id = ticket_id
 
     # Extract possible course (improved to scan description too)
     possible_course = extract_possible_course(subject, description)
-    logging.info("🔍 Extracted possible_course: %s", possible_course)
+    logging.info("🔍 Extracted possible_course: '%s'", possible_course)
     if not possible_course:
         logging.info("ℹ️ No valid course name extracted from ticket %s", ticket_id)
         course_details = {"course_name": "", "details": "No course specified"}
     else:
         course_details = get_course_details(possible_course)
+        logging.info("📚 Course details resolved: %s", json.dumps(course_details))
 
-    # AI classification
+    # AI classification - Improved prompt to enforce COURSE_INQUIRY for course queries and use details
     system_prompt = (
         "You are a customer support assistant. Always respond in English only. "
-        "Return JSON with: intent (one word), confidence (0-1), summary (2-3 lines), "
-        "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template), "
-        "kb_suggestions (list of short titles or URLs).\n"
-        "Include course details if provided: {course_details}\n"
+        "Classify as COURSE_INQUIRY if the query mentions a specific course name. "
+        "If course details are provided, you MUST use them accurately in the reply_draft—do not say 'no info' if details exist. "
+        "For course inquiries, set intent to COURSE_INQUIRY and confidence to 0.95+ if match is clear. "
+        "Return JSON with: intent (one word: COURSE_INQUIRY, GENERAL, INQUIRY, BILLING), confidence (0-1 float, high for clear matches), summary (2-3 lines), "
+        "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template, include ALL course details if relevant), "
+        "kb_suggestions (list of 3 short titles or URLs).\n"
+        "Course details provided: {course_details}. Integrate fully into reply_draft if query matches course_name.\n"
         "Reply template:\n"
         "Dear [CustomerName],\n\n"
-        "[Helpful AI reply]\n\n"
+        "[Helpful AI reply with accurate course info, duration, fees, link, certificate if applicable]\n\n"
         "Best regards,\nSupport Team"
-    ).format(course_details=json.dumps(course_details) if possible_course else "")
+    ).format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
     user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nReturn valid JSON only."
 
     try:
@@ -297,6 +321,7 @@ async def freshdesk_webhook(request: Request):
         assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
         logging.info("🤖 OpenAI raw response: %s", assistant_text)
         parsed = json.loads(assistant_text)
+        logging.info("🤖 Parsed AI response: %s", json.dumps(parsed))
     except Exception as e:
         logging.exception("⚠️ OpenAI or JSON parse error: %s", e)
         parsed = {
@@ -304,23 +329,26 @@ async def freshdesk_webhook(request: Request):
             "confidence": 0.0,
             "summary": description[:200],
             "sentiment": "UNKNOWN",
-            "reply_draft": "AI parsing failed.",
+            "reply_draft": "AI parsing failed. Please review manually.",
             "kb_suggestions": []
         }
 
     intent = parsed.get("intent", "UNKNOWN").upper()
-    confidence = parsed.get("confidence", 0.0)
+    confidence = float(parsed.get("confidence", 0.0))  # Ensure float
     if math.isnan(confidence):
         confidence = 0.0  # Safeguard against NaN
+    logging.info("🧠 AI Classification: Intent=%s, Confidence=%.2f", intent, confidence)
     is_payment_issue = intent in ["BILLING", "PAYMENT"]
 
-    # Build draft note
+    # Build draft note with more details
     note = f"""**🤖 AI Assist (draft)**
 
+**Ticket ID:** {ticket_id} | **Master ID:** {master_id}
 **Intent:** {intent}
 **Confidence:** {confidence}
 **Sentiment:** {parsed.get('sentiment')}
 **Summary:** {parsed.get('summary')}
+**Extracted Course:** {possible_course}
 **Course Details:** {json.dumps(course_details, ensure_ascii=False)}
 **Draft Reply:** {parsed.get('reply_draft')}
 **KB Suggestions:** {json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
@@ -334,14 +362,18 @@ async def freshdesk_webhook(request: Request):
 
     # Auto-reply if safe
     auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+    logging.info("📤 Auto-reply check: Enabled=%s, Safe Intent=%s, Confidence OK=%s, Payment=%s -> OK=%s", 
+                 ENABLE_AUTO_REPLY, intent in SAFE_INTENTS, confidence >= AUTO_REPLY_CONFIDENCE, is_payment_issue, auto_reply_ok)
     if auto_reply_ok:
         try:
-            post_freshdesk_reply(master_id, parsed.get("reply_draft", ""))
-            logging.info("✅ Auto-replied to ticket %s", master_id)
+            reply_body = parsed.get("reply_draft", "Thank you for your inquiry. Our team will assist shortly. Best regards, Support Team")
+            post_freshdesk_reply(master_id, reply_body)
+            logging.info("✅ Auto-replied to ticket %s with body: %s", master_id, reply_body[:100] + "..." if len(reply_body) > 100 else reply_body)
         except Exception as e:
             logging.exception("❌ Failed posting auto-reply: %s", e)
     else:
-        logging.info("ℹ️ Auto-reply skipped (intent/setting)")
+        logging.info("ℹ️ Auto-reply skipped for ticket %s (intent: %s, confidence: %.2f, payment: %s)", 
+                     master_id, intent, confidence, is_payment_issue)
 
     response_data = {
         "ok": True,
@@ -351,6 +383,7 @@ async def freshdesk_webhook(request: Request):
         "confidence": confidence,
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok,
-        "course_details": course_details
+        "course_details": course_details,
+        "possible_course": possible_course
     }
     return sanitize_dict(response_data)
