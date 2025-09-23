@@ -317,37 +317,34 @@ async def freshdesk_webhook(request: Request):
         logging.info("📚 Course details resolved: %s", json.dumps(course_details))
 
     # AI classification - Enhanced, organized prompt for exact format and accurate course usage
-    system_prompt = """You are a customer support assistant for IMK team. Always respond in English only.
+    system_prompt = (
+    "You are a customer support assistant for IMK team. Always respond in English only. "
+    "Classify as COURSE_INQUIRY if the query mentions a specific course name like 'Wealth Mastery' or 'Health Mastery'. "
+    "If course details are provided, you MUST use them accurately in the reply_draft—include all fields (fees, link, certificate, notes) without saying 'no info'. "
+    "For course inquiries, set intent to COURSE_INQUIRY and confidence to 0.95. "
+    "Return JSON with: intent (one word: COURSE_INQUIRY, GENERAL, INQUIRY, BILLING), confidence (0-1 float, high for clear matches), summary (2-3 lines), "
+    "sentiment (Angry/Neutral/Positive), reply_draft (MUST follow exact format below with proper line breaks, integrate ALL course details if relevant), "
+    "kb_suggestions (list of 3 short titles or URLs).\n"
+    "Exact Reply Draft Format (copy verbatim, replace [CustomerName] with provided name, insert helpful content). "
+    "Ensure each part appears on its own line, separated by '\\n\\n':\n"
+    "Dear [CustomerName],\\n\\n"
+    "Thank you for reaching out to us,\\n\\n"
+    "This is Rahul from team IMK, We are here to help you.\\n\\n"
+    "[Insert helpful reply with full course details: name, fees, link, certificate, notes]\\n\\n"
+    "Thanks & Regards\\n"
+    "Rahul\\n"
+    "Team IMK\\n\\n"
+    "[Footer Image: <img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>]\\n\\n"
+    "Course details provided: {course_details}. Integrate fully into the helpful reply section if query matches course_name."
+).format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
 
-Classification Rules:
-- Classify as COURSE_INQUIRY if the query mentions a specific course name like 'Wealth Mastery' or 'Health Mastery'.
-- If course details are provided, you MUST use them accurately in the reply_draft—include all fields (fees, link, certificate, notes) without saying 'no info'.
-- For course inquiries, set intent to COURSE_INQUIRY and confidence to 0.95.
+user_prompt = (
+    f"Ticket subject:\n{subject}\n\n"
+    f"Ticket body:\n{description}\n\n"
+    f"Customer Name: {customer_name}\n\n"
+    "Return valid JSON only."
+)
 
-Output Format:
-Return valid JSON only with these keys:
-- intent (one word: COURSE_INQUIRY, GENERAL, INQUIRY, BILLING)
-- confidence (0-1 float, high for clear matches)
-- summary (2-3 lines)
-- sentiment (Angry/Neutral/Positive)
-- reply_draft (MUST follow exact format below, integrate ALL course details if relevant)
-- kb_suggestions (list of 3 short titles or URLs)
-
-Exact Reply Draft Format (copy verbatim, replace [CustomerName] with provided name, insert helpful content):
-Dear [CustomerName],
-
-Thank you for reaching out to us,
-
-This is Rahul from team IMK, We are here to help you.........[Insert helpful reply with full course details: name, fees, link, certificate, notes]
-
-Thanks & Regards
-Rahul
-Team IMK
-
-<img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'>
-
-Course details provided: {course_details}. Integrate fully into the helpful reply section if query matches course_name.""" .format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
-    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nReturn valid JSON only."
 
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
@@ -424,3 +421,4 @@ Course details provided: {course_details}. Integrate fully into the helpful repl
         "customer_name": customer_name
     }
     return sanitize_dict(response_data)
+
