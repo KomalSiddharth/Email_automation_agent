@@ -338,7 +338,7 @@ async def freshdesk_webhook(request: Request):
     "Course details provided: {course_details}. Integrate fully into the helpful reply section if query matches course_name."
 ).format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
 
-user_prompt = (
+    user_prompt = (
     f"Ticket subject:\n{subject}\n\n"
     f"Ticket body:\n{description}\n\n"
     f"Customer Name: {customer_name}\n\n"
@@ -421,4 +421,5 @@ user_prompt = (
         "customer_name": customer_name
     }
     return sanitize_dict(response_data)
+
 
