@@ -29,7 +29,7 @@ if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
 # Initialize COURSES_DF
 # --------------------------
 try:
-    COURSES_DF = pd.read_csv("courses.csv")  # Adjust path if needed
+    COURSES_DF = pd.read_csv("fees_and_certificates.xlsx")  # Adjust path if needed
     logging.info("✅ Loaded COURSES_DF with %d rows", len(COURSES_DF))
 except Exception as e:
     logging.error("❌ Failed to load COURSES_DF: %s", e)
@@ -318,4 +318,5 @@ async def freshdesk_webhook(request: Request):
         "auto_reply": auto_reply_ok,
         "course_details": course_details
     }
+
 
