@@ -24,7 +24,7 @@ SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COUR
 TEST_EMAIL = "komalsiddharth814@gmail.com".lower()  # Only this email is processed
 
 KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "courses.csv")  # Default to courses.csv as per requirements
-KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF""faq.pdf")  # Optional, e.g., "faqs.pdf"
+KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF","faq.pdf")  # Optional, e.g., "faqs.pdf"
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -196,17 +196,22 @@ async def freshdesk_webhook(request: Request):
         "You are a customer support assistant. Always respond in English only. "
         "Strictly use the provided Knowledge Base Context for any specific details like fees, certificates, links, courses, or FAQs. "
         "Compulsorily reference the CSV for fees, certificate, links, and course names if relevant. "
-        "Do not invent or assume information not in the KB or your general knowledge. "
-        "If the query cannot be answered from the KB, say so and suggest contacting support. "
-        "Use common sense for general responses but prioritize KB accuracy. "
+        "Do not invent or assume information not in the KB. "
+        "If the query cannot be answered from the KB, respond politely using your common sense, acknowledge the query, and suggest contacting support for more details. "
+        "Always answer in a friendly and polite way, using engaging and respectful language like a professional public speaker. "
         "Ensure the reply_draft is professional, well-structured with short paragraphs, bullet points if appropriate, and proper line breaks for readability. "
         "Return JSON with: intent (one word), confidence (0-1), summary (2-3 lines), "
         "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template with proper formatting), "
         "kb_suggestions (list of short titles or URLs).\n"
         "Reply template:\n"
-        "Dear {requester_name},\n\n"
-        "[Helpful AI reply based strictly on KB - use short paragraphs and bullets for clarity]\n\n"
-        "Best regards,\nSupport Team"
+        "Hi {requester_name},\n\n"
+        "Thank you for reaching out to us,\n\n"
+        "This is Rahul from team IMK, We are here to help you\n\n"
+        "[Helpful AI reply based strictly on KB or polite common sense response - use short paragraphs and bullets for clarity]\n\n"
+        "Thanks & Regards\n"
+        "Rahul\n"
+        "Team IMK\n"
+        "https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8"
     ).format(requester_name=requester_name)  # Inject name into template
     user_prompt = f"Customer Name: {requester_name}\nTicket subject:\n{subject}\n\nTicket body:\n{description}\n\n"
     if kb_content:
@@ -225,7 +230,7 @@ async def freshdesk_webhook(request: Request):
             "confidence": 0.0,
             "summary": description[:200],
             "sentiment": "UNKNOWN",
-            "reply_draft": "AI parsing failed.",
+            "reply_draft": "Hi {requester_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you\n\nThank you for your inquiry. Our support team will get back to you soon with more details.\n\nThanks & Regards\nRahul\nTeam IMK\nhttps://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8".format(requester_name=requester_name),
             "kb_suggestions": []
         }
 
@@ -270,7 +275,7 @@ async def freshdesk_webhook(request: Request):
 
     if auto_reply_ok:
         try:
-            reply_body = parsed.get("reply_draft", "Thank you for your inquiry. Our support team will get back to you soon.")
+            reply_body = parsed.get("reply_draft", "Hi {requester_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you\n\nThank you for your inquiry. Our support team will get back to you soon with more details.\n\nThanks & Regards\nRahul\nTeam IMK\nhttps://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8".format(requester_name=requester_name))
             post_freshdesk_reply(master_id, reply_body)
             logging.info("✅ Auto-replied to ticket %s", master_id)
         except Exception as e:
