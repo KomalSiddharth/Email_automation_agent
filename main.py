@@ -21,7 +21,7 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "true").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
-TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
+TEST_EMAIL = "komalsiddharth814@gmail.com".lower()  # Only this email is processed
 
 KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "courses.csv")  # Default to courses.csv as per requirements
 KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF","faq.pdf")  # Optional, e.g., "faqs.pdf"
@@ -99,8 +99,9 @@ def get_freshdesk_ticket(ticket_id: int) -> dict | None:
         return None
     return resp.json()
 
-def get_master_ticket_id(ticket_id: int) -> int:
-    ticket = get_freshdesk_ticket(ticket_id)
+def get_master_ticket_id(ticket_id: int, ticket: dict = None) -> int:
+    if not ticket:
+        ticket = get_freshdesk_ticket(ticket_id)
     if not ticket:
         return ticket_id
     parent_id = ticket.get("merged_ticket_id") or ticket.get("custom_fields", {}).get("cf_parent_ticket_id")
@@ -121,43 +122,6 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
     resp.raise_for_status()
     return resp.json()
 
-def extract_requester_info(payload: dict) -> tuple:
-    """
-    Robust extraction of requester email and name from payload
-    Handles different Freshdesk webhook structures
-    """
-    logging.info("🔍 Payload for requester extraction: %s", json.dumps(payload, ensure_ascii=False))
-    ticket = payload.get("ticket") or payload
-
-    # Direct checks for email and name
-    email = None
-    name = "Customer"  # Default
-
-    if "requester" in ticket:
-        email = ticket["requester"].get("email")
-        name = ticket["requester"].get("name", name)
-    elif "contact" in ticket:
-        email = ticket["contact"].get("email")
-        name = ticket["contact"].get("name", name)
-    elif "requester_email" in ticket:
-        email = ticket["requester_email"]
-    elif "email" in ticket:
-        email = ticket["email"]
-    elif "from" in ticket:
-        email = ticket["from"]
-
-    # Fallback for nested structures
-    if not email:
-        try:
-            email = payload["ticket"]["requester"]["email"]
-            name = payload["ticket"]["requester"].get("name", name)
-        except:
-            pass
-
-    if email:
-        email = email.lower()
-    return email, name
-
 # --------------------------
 # Routes
 # --------------------------
@@ -173,43 +137,43 @@ def health():
 async def freshdesk_webhook(request: Request):
     try:
         payload = await request.json()
-        logging.info("📩 Incoming Freshdesk payload: %s", payload)
+        logging.info("📩 Incoming Freshdesk payload: %s", json.dumps(payload, ensure_ascii=False))
     except Exception as e:
         logging.exception("❌ Failed to parse JSON payload: %s", e)
         return {"ok": False, "error": "invalid JSON"}
 
-    # Extract ticket details safely
+    # Extract ticket_id safely
     ticket = payload.get("ticket") or payload
-    ticket_id = ticket.get("id") or payload.get("id")
-    subject = ticket.get("subject", "")
-    description = ticket.get("description", "")
-
-    # Extract requester email and name robustly
-    requester_email, requester_name = extract_requester_info(payload)
-    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s, requester_name: %s", ticket_id, requester_email, requester_name)
+    ticket_id = ticket.get("id") or payload.get("id") or ticket.get("ticket_id") or payload.get("ticket_id")
 
     if not ticket_id:
         logging.error("❌ Ticket id missing in payload")
         return {"ok": False, "error": "ticket id not found"}
 
+    # Fetch full ticket details immediately to get accurate requester info
+    full_ticket = get_freshdesk_ticket(ticket_id)
+    if not full_ticket:
+        logging.error("❌ Failed to fetch full ticket details for %s", ticket_id)
+        return {"ok": False, "error": "failed to fetch ticket"}
+
+    requester_email = full_ticket.get("requester", {}).get("email", "").lower()
+    requester_name = full_ticket.get("requester", {}).get("name", "Customer")
+    subject = full_ticket.get("subject", "")
+    description = full_ticket.get("description", "")
+
+    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s, requester_name: %s", ticket_id, requester_email, requester_name)
+
     if not requester_email:
-        logging.warning("⚠️ Requester email missing, skipping auto-reply")
+        logging.warning("⚠️ Requester email missing even from API, skipping auto-reply")
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
-    if requester_email != TEST_EMAIL.lower():
+    if requester_email != TEST_EMAIL:
         logging.info("⏭️ Ignored ticket %s from %s (testing phase)", ticket_id, requester_email)
         return {"ok": True, "skipped": True}
 
-    # Fetch full ticket details to ensure complete data
-    full_ticket = get_freshdesk_ticket(ticket_id)
-    if full_ticket:
-        subject = full_ticket.get("subject", subject)
-        description = full_ticket.get("description", description)
-        requester_name = full_ticket.get("requester", {}).get("name", requester_name)
-
     # Get master ticket ID
     try:
-        master_id = get_master_ticket_id(ticket_id)
+        master_id = get_master_ticket_id(ticket_id, full_ticket)
         logging.info("🔀 Master ticket id: %s", master_id)
     except Exception as e:
         logging.exception("❌ Failed to get master ticket id: %s", e)
@@ -313,4 +277,3 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
-
