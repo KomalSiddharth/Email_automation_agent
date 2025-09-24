@@ -24,7 +24,7 @@ SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COUR
 TEST_EMAIL = "komalsiddharth814@gmail.com".lower()  # Only this email is processed
 
 KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "courses.csv")  # Default to courses.csv as per requirements
-KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF","faq.pdf")  # Optional, e.g., "faqs.pdf"
+KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF""faq.pdf")  # Optional, e.g., "faqs.pdf"
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -199,12 +199,13 @@ async def freshdesk_webhook(request: Request):
         "Do not invent or assume information not in the KB or your general knowledge. "
         "If the query cannot be answered from the KB, say so and suggest contacting support. "
         "Use common sense for general responses but prioritize KB accuracy. "
+        "Ensure the reply_draft is professional, well-structured with short paragraphs, bullet points if appropriate, and proper line breaks for readability. "
         "Return JSON with: intent (one word), confidence (0-1), summary (2-3 lines), "
-        "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template), "
+        "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template with proper formatting), "
         "kb_suggestions (list of short titles or URLs).\n"
         "Reply template:\n"
         "Dear {requester_name},\n\n"
-        "[Helpful AI reply based strictly on KB]\n\n"
+        "[Helpful AI reply based strictly on KB - use short paragraphs and bullets for clarity]\n\n"
         "Best regards,\nSupport Team"
     ).format(requester_name=requester_name)  # Inject name into template
     user_prompt = f"Customer Name: {requester_name}\nTicket subject:\n{subject}\n\nTicket body:\n{description}\n\n"
