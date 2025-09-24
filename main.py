@@ -213,7 +213,7 @@ async def freshdesk_webhook(request: Request):
         "Thanks & Regards\n"
         "Rahul\n"
         "Team IMK\n"
-        <img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8"/>
+        "<img src=\"https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8\"/>"
     ).format(requester_name=requester_name)  # Inject name into template
     user_prompt = f"Customer Name: {requester_name}\nTicket subject:\n{subject}\n\nTicket body:\n{description}\n\n"
     if kb_content:
@@ -232,7 +232,7 @@ async def freshdesk_webhook(request: Request):
             "confidence": 0.0,
             "summary": description[:200],
             "sentiment": "UNKNOWN",
-            "reply_draft": "Hi {requester_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you\n\nThank you for your inquiry. Our support team will get back to you soon with more details.\n\nThanks & Regards\nRahul\nTeam IMK\nhttps://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8".format(requester_name=requester_name),
+            "reply_draft": "Hi {requester_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you\n\nThank you for your inquiry. Our support team will get back to you soon with more details.\n\nThanks & Regards\nRahul\nTeam IMK\n<img src=\"https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8\"/>".format(requester_name=requester_name),
             "kb_suggestions": []
         }
 
@@ -277,7 +277,7 @@ async def freshdesk_webhook(request: Request):
 
     if auto_reply_ok:
         try:
-            reply_body = parsed.get("reply_draft", "Hi {requester_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you\n\nThank you for your inquiry. Our support team will get back to you soon with more details.\n\nThanks & Regards\nRahul\nTeam IMK\nhttps://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8".format(requester_name=requester_name))
+            reply_body = parsed.get("reply_draft", "Hi {requester_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you\n\nThank you for your inquiry. Our support team will get back to you soon with more details.\n\nThanks & Regards\nRahul\nTeam IMK\n<img src=\"https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8\"/>".format(requester_name=requester_name))
             post_freshdesk_reply(master_id, reply_body)
             logging.info("✅ Auto-replied to ticket %s", master_id)
         except Exception as e:
@@ -294,4 +294,3 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
-
