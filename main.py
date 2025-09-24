@@ -200,6 +200,8 @@ async def freshdesk_webhook(request: Request):
         "If the query cannot be answered from the KB, respond politely using your common sense, acknowledge the query, and suggest contacting support for more details. "
         "Always answer in a friendly and polite way, using engaging and respectful language like a professional public speaker. "
         "Ensure the reply_draft is professional, well-structured with short paragraphs, bullet points if appropriate, and proper line breaks for readability. "
+        "For course details, use bullet points with each key info (e.g., course name, fee, certificate status, enrollment link) on new lines. Do not say 'Course Link' - directly embed the actual hyperlink like [Enroll in NLP Masterclass](https://www.miteshkhatri.com/nlp/). "
+        "Include the attachment image token at the end for display. "
         "Return JSON with: intent (one word), confidence (0-1), summary (2-3 lines), "
         "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template with proper formatting), "
         "kb_suggestions (list of short titles or URLs).\n"
