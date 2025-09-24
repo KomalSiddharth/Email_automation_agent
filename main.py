@@ -213,7 +213,7 @@ async def freshdesk_webhook(request: Request):
         "Thanks & Regards\n"
         "Rahul\n"
         "Team IMK\n"
-        "https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8"
+        <img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8"/>
     ).format(requester_name=requester_name)  # Inject name into template
     user_prompt = f"Customer Name: {requester_name}\nTicket subject:\n{subject}\n\nTicket body:\n{description}\n\n"
     if kb_content:
@@ -294,3 +294,4 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
