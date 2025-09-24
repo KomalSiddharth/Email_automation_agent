@@ -4,4 +4,7 @@ python-dotenv
 requests
 pandas
 openpyxl
+PyPDF2
+flask
+
 
