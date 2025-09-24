@@ -92,7 +92,7 @@ def extract_from_csv(file_path: str, query: str) -> str:
         return ""
 
 def get_freshdesk_ticket(ticket_id: int) -> dict | None:
-    url = f"https://{FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets/{ticket_id}"
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}?include=requester"
     resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
     if resp.status_code != 200:
         logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
@@ -111,13 +111,13 @@ def get_master_ticket_id(ticket_id: int, ticket: dict = None) -> int:
     return ticket_id
 
 def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
-    url = f"https://{FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets/{ticket_id}/notes"
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
     resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
     resp.raise_for_status()
     return resp.json()
 
 def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
-    url = f"https://{FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets/{ticket_id}/reply"
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/reply"
     resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body}, timeout=20)
     resp.raise_for_status()
     return resp.json()
