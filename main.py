@@ -23,8 +23,8 @@ AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
 TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
 
-KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV")  # e.g., "fees.csv"
-KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF")  # e.g., "faqs.pdf"
+KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "courses.csv")  # Default to courses.csv as per requirements
+KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF")  # Optional, e.g., "faqs.pdf"
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -63,9 +63,10 @@ def extract_from_pdf(file_path: str, query: str) -> str:
         with open(file_path, 'rb') as f:
             reader = PyPDF2.PdfReader(f)
             text = ""
+            query_words = query.lower().split()
             for page in reader.pages:
                 page_text = page.extract_text() or ""
-                if query.lower() in page_text.lower():
+                if any(word in page_text.lower() for word in query_words):
                     text += page_text + "\n\n"
             return text[:4000]  # Limit to avoid token overflow
     except Exception as e:
@@ -77,15 +78,21 @@ def extract_from_csv(file_path: str, query: str) -> str:
         return ""
     try:
         df = pd.read_csv(file_path)
-        # Filter rows where any column contains the query
-        matches = df[df.apply(lambda row: any(query.lower() in str(val).lower() for val in row), axis=1)]
+        query_words = query.lower().split()
+        # Filter rows where any column contains any word from the query
+        matches = df[df.apply(lambda row: any(word in str(val).lower() for val in row for word in query_words), axis=1)]
+        if matches.empty:
+            # If no matches but CSV is compulsory for certain topics, include full if keywords present
+            compulsory_keywords = ["fees", "certificate", "links", "course"]
+            if any(kw in query.lower() for kw in compulsory_keywords):
+                return df.to_string(index=False)[:4000]
         return matches.to_string(index=False)[:4000]
     except Exception as e:
         logging.error(f"CSV extraction error: {e}")
         return ""
 
 def get_freshdesk_ticket(ticket_id: int) -> dict | None:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
+    url = f"https://{FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets/{ticket_id}"
     resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
     if resp.status_code != 200:
         logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
@@ -103,42 +110,53 @@ def get_master_ticket_id(ticket_id: int) -> int:
     return ticket_id
 
 def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
+    url = f"https://{FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets/{ticket_id}/notes"
     resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
     resp.raise_for_status()
     return resp.json()
 
 def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/reply"
+    url = f"https://{FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets/{ticket_id}/reply"
     resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body}, timeout=20)
     resp.raise_for_status()
     return resp.json()
 
-def extract_requester_email(payload: dict) -> str:
+def extract_requester_info(payload: dict) -> tuple:
     """
-    Robust extraction of requester email from payload
+    Robust extraction of requester email and name from payload
     Handles different Freshdesk webhook structures
     """
-    logging.info("🔍 Payload for email extraction: %s", json.dumps(payload, ensure_ascii=False))
+    logging.info("🔍 Payload for requester extraction: %s", json.dumps(payload, ensure_ascii=False))
     ticket = payload.get("ticket") or payload
 
-    # Direct checks
-    if "requester" in ticket and "email" in ticket["requester"]:
-        return ticket["requester"]["email"].lower()
-    if "contact" in ticket and "email" in ticket["contact"]:
-        return ticket["contact"]["email"].lower()
-    if "requester_email" in ticket:
-        return ticket["requester_email"].lower()
-    if "email" in ticket:
-        return ticket["email"].lower()
-    if "from" in ticket:
-        return ticket["from"].lower()
+    # Direct checks for email and name
+    email = None
+    name = "Customer"  # Default
 
-    # fallback for nested structures
-    try:
-        return payload["ticket"]["requester"]["email"].lower()
-    except:
-        return ""
+    if "requester" in ticket:
+        email = ticket["requester"].get("email")
+        name = ticket["requester"].get("name", name)
+    elif "contact" in ticket:
+        email = ticket["contact"].get("email")
+        name = ticket["contact"].get("name", name)
+    elif "requester_email" in ticket:
+        email = ticket["requester_email"]
+    elif "email" in ticket:
+        email = ticket["email"]
+    elif "from" in ticket:
+        email = ticket["from"]
+
+    # Fallback for nested structures
+    if not email:
+        try:
+            email = payload["ticket"]["requester"]["email"]
+            name = payload["ticket"]["requester"].get("name", name)
+        except:
+            pass
+
+    if email:
+        email = email.lower()
+    return email, name
 
 # --------------------------
 # Routes
@@ -166,9 +184,9 @@ async def freshdesk_webhook(request: Request):
     subject = ticket.get("subject", "")
     description = ticket.get("description", "")
 
-    # Extract requester email robustly
-    requester_email = extract_requester_email(payload)
-    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
+    # Extract requester email and name robustly
+    requester_email, requester_name = extract_requester_info(payload)
+    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s, requester_name: %s", ticket_id, requester_email, requester_name)
 
     if not ticket_id:
         logging.error("❌ Ticket id missing in payload")
@@ -178,9 +196,16 @@ async def freshdesk_webhook(request: Request):
         logging.warning("⚠️ Requester email missing, skipping auto-reply")
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
-    if requester_email.lower() != TEST_EMAIL.lower():
-        logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
+    if requester_email != TEST_EMAIL.lower():
+        logging.info("⏭️ Ignored ticket %s from %s (testing phase)", ticket_id, requester_email)
         return {"ok": True, "skipped": True}
+
+    # Fetch full ticket details to ensure complete data
+    full_ticket = get_freshdesk_ticket(ticket_id)
+    if full_ticket:
+        subject = full_ticket.get("subject", subject)
+        description = full_ticket.get("description", description)
+        requester_name = full_ticket.get("requester", {}).get("name", requester_name)
 
     # Get master ticket ID
     try:
@@ -190,20 +215,23 @@ async def freshdesk_webhook(request: Request):
         logging.exception("❌ Failed to get master ticket id: %s", e)
         master_id = ticket_id
 
-    # Extract KB content
+    # Extract KB content compulsorily for fees, certificate, links, course
     query_terms = f"{subject} {description}"  # Use ticket content as query
     kb_content = ""
     if KNOWLEDGE_BASE_PDF:
         kb_content += "\nPDF Knowledge Base:\n" + extract_from_pdf(KNOWLEDGE_BASE_PDF, query_terms)
     if KNOWLEDGE_BASE_CSV:
-        kb_content += "\nCSV Knowledge Base:\n" + extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
+        kb_content += "\nCSV Knowledge Base (fees, certificates, links, courses):\n" + extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
     if kb_content:
         logging.info("📚 Extracted KB content length: %d", len(kb_content))
+    else:
+        logging.warning("⚠️ No KB content extracted; ensure files exist and are accessible.")
 
     # AI classification
     system_prompt = (
         "You are a customer support assistant. Always respond in English only. "
-        "Strictly use the provided Knowledge Base Context for any specific details like fees, courses, or FAQs. "
+        "Strictly use the provided Knowledge Base Context for any specific details like fees, certificates, links, courses, or FAQs. "
+        "Compulsorily reference the CSV for fees, certificate, links, and course names if relevant. "
         "Do not invent or assume information not in the KB or your general knowledge. "
         "If the query cannot be answered from the KB, say so and suggest contacting support. "
         "Use common sense for general responses but prioritize KB accuracy. "
@@ -211,11 +239,11 @@ async def freshdesk_webhook(request: Request):
         "sentiment (Angry/Neutral/Positive), reply_draft (polite email reply using template), "
         "kb_suggestions (list of short titles or URLs).\n"
         "Reply template:\n"
-        "Dear [CustomerName],\n\n"
+        "Dear {requester_name},\n\n"
         "[Helpful AI reply based strictly on KB]\n\n"
         "Best regards,\nSupport Team"
-    )
-    user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\n"
+    ).format(requester_name=requester_name)  # Inject name into template
+    user_prompt = f"Customer Name: {requester_name}\nTicket subject:\n{subject}\n\nTicket body:\n{description}\n\n"
     if kb_content:
         user_prompt += f"Knowledge Base Context:\n{kb_content}\n\n"
     user_prompt += "Return valid JSON only."
@@ -238,7 +266,7 @@ async def freshdesk_webhook(request: Request):
 
     intent = parsed.get("intent", "UNKNOWN").upper()
     confidence = parsed.get("confidence", 0.0)
-    is_payment_issue = intent in ["BILLING", "PAYMENT"]
+    is_payment_issue = "PAYMENT" in intent or "BILLING" in intent  # More flexible match
 
     # Build draft note
     note = f"""**🤖 AI Assist (draft)**
