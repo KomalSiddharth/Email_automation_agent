@@ -77,7 +77,6 @@ def extract_from_csv(file_path: str, query: str) -> str:
         return ""
     try:
         df = pd.read_csv(file_path)
-        # Filter rows where any column contains the query
         matches = df[df.apply(lambda row: any(query.lower() in str(val).lower() for val in row), axis=1)]
         return matches.to_string(index=False)[:4000]
     except Exception as e:
@@ -116,29 +115,45 @@ def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
 
 def extract_requester_email(payload: dict) -> str:
     """
-    Robust extraction of requester email from payload
-    Handles different Freshdesk webhook structures
+    Robust extraction of requester email from payload for both ticket creation and replies
+    Handles onTicketCreate and onConversationCreate webhook structures
     """
     logging.info("🔍 Payload for email extraction: %s", json.dumps(payload, ensure_ascii=False))
     ticket = payload.get("ticket") or payload
+    conversation = payload.get("conversation") or {}
 
-    # Direct checks
-    if "requester" in ticket and "email" in ticket["requester"]:
-        return ticket["requester"]["email"].lower()
-    if "contact" in ticket and "email" in ticket["contact"]:
-        return ticket["contact"]["email"].lower()
-    if "requester_email" in ticket:
-        return ticket["requester_email"].lower()
-    if "email" in ticket:
-        return ticket["email"].lower()
-    if "from" in ticket:
-        return ticket["from"].lower()
+    # Try common paths for onTicketCreate
+    email_paths = [
+        (ticket.get("requester", {}).get("email"), "ticket.requester.email"),
+        (ticket.get("contact", {}).get("email"), "ticket.contact.email"),
+        (ticket.get("requester_email"), "ticket.requester_email"),
+        (ticket.get("email"), "ticket.email"),
+        (ticket.get("from"), "ticket.from"),
+        (payload.get("requester", {}).get("email"), "requester.email"),
+        # For onConversationCreate (replies)
+        (conversation.get("user", {}).get("email"), "conversation.user.email"),
+        (conversation.get("from_email"), "conversation.from_email"),
+    ]
 
-    # fallback for nested structures
-    try:
-        return payload["ticket"]["requester"]["email"].lower()
-    except:
-        return ""
+    for email, path in email_paths:
+        if email and isinstance(email, str) and '@' in email:
+            logging.info(f"✅ Email extracted from {path}: {email.lower()}")
+            return email.lower().strip()
+
+    # Fallback: Fetch ticket details via API if no email found
+    ticket_id = ticket.get("id") or payload.get("id")
+    if ticket_id:
+        try:
+            ticket_data = get_freshdesk_ticket(ticket_id)
+            if ticket_data and ticket_data.get("requester", {}).get("email"):
+                email = ticket_data["requester"]["email"].lower().strip()
+                logging.info(f"✅ Email fetched via API: {email}")
+                return email
+        except Exception as e:
+            logging.error(f"❌ API fallback failed for ticket {ticket_id}: {e}")
+
+    logging.warning("⚠️ No valid email found in payload")
+    return ""
 
 # --------------------------
 # Routes
@@ -155,16 +170,25 @@ def health():
 async def freshdesk_webhook(request: Request):
     try:
         payload = await request.json()
-        logging.info("📩 Incoming Freshdesk payload: %s", payload)
+        logging.info("📩 Incoming Freshdesk payload: %s", json.dumps(payload, ensure_ascii=False))
     except Exception as e:
         logging.exception("❌ Failed to parse JSON payload: %s", e)
         return {"ok": False, "error": "invalid JSON"}
 
+    # Determine event type
+    event_type = payload.get("eventType", "").lower()
+    is_ticket_create = event_type == "onticketcreate"
+    is_conversation_create = event_type == "onconversationcreate"
+
+    if not (is_ticket_create or is_conversation_create):
+        logging.warning("⚠️ Unsupported event type: %s", event_type)
+        return {"ok": True, "skipped": True, "reason": "unsupported event"}
+
     # Extract ticket details safely
     ticket = payload.get("ticket") or payload
-    ticket_id = ticket.get("id") or payload.get("id")
+    ticket_id = ticket.get("id") or payload.get("id") or payload.get("conversation", {}).get("ticket_id")
     subject = ticket.get("subject", "")
-    description = ticket.get("description", "")
+    description = ticket.get("description", "") or payload.get("conversation", {}).get("body_text", "")
 
     # Extract requester email robustly
     requester_email = extract_requester_email(payload)
@@ -175,12 +199,12 @@ async def freshdesk_webhook(request: Request):
         return {"ok": False, "error": "ticket id not found"}
 
     if not requester_email:
-        logging.warning("⚠️ Requester email missing, skipping auto-reply")
+        logging.warning("⚠️ Requester email missing, skipping processing")
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
     if requester_email.lower() != TEST_EMAIL.lower():
-        logging.info("⏭️ Ignored ticket %s from %s", ticket_id, requester_email)
-        return {"ok": True, "skipped": True}
+        logging.info("⏭️ Ignored ticket %s from %s (not test email)", ticket_id, requester_email)
+        return {"ok": True, "skipped": True, "reason": "non-test email"}
 
     # Get master ticket ID
     try:
@@ -191,7 +215,7 @@ async def freshdesk_webhook(request: Request):
         master_id = ticket_id
 
     # Extract KB content
-    query_terms = f"{subject} {description}"  # Use ticket content as query
+    query_terms = f"{subject} {description}"  # Use ticket/conversation content as query
     kb_content = ""
     if KNOWLEDGE_BASE_PDF:
         kb_content += "\nPDF Knowledge Base:\n" + extract_from_pdf(KNOWLEDGE_BASE_PDF, query_terms)
@@ -283,6 +307,6 @@ async def freshdesk_webhook(request: Request):
         "intent": intent,
         "confidence": confidence,
         "requester_email": requester_email,
-        "auto_reply": auto_reply_ok
+        "auto_reply": auto_reply_ok,
+        "event_type": event_type
     }
-
