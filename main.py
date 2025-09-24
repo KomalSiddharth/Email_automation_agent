@@ -24,7 +24,7 @@ SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COUR
 TEST_EMAIL = "komalsiddharth814@gmail.com"  # Only this email is processed
 
 KNOWLEDGE_BASE_CSV = os.getenv("courses.csv")  # e.g., "fees.csv"
-KNOWLEDGE_BASE_PDF = os.getenv("faqs.pdf")  # e.g., "faqs.pdf"
+KNOWLEDGE_BASE_PDF = os.getenv("faq.pdf")  # e.g., "faqs.pdf"
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -285,3 +285,4 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
