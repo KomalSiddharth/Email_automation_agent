@@ -7,16 +7,6 @@ from dotenv import load_dotenv
 import PyPDF2
 import pandas as pd
 import re
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
-import nltk
-
-# Download NLTK data (Render needs this to be explicit)
-try:
-    nltk.download('punkt', quiet=True)
-    nltk.download('stopwords', quiet=True)
-except Exception as e:
-    logging.error(f"❌ NLTK download failed: {e}")
 
 # --------------------------
 # Load Environment Variables
@@ -72,13 +62,17 @@ def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperatur
         raise
 
 def preprocess_query(query: str) -> list:
-    """Preprocess query into keywords, removing stop words."""
+    """Preprocess query into keywords, removing common stop words."""
+    stop_words = {
+        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has', 'he',
+        'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the', 'to', 'was', 'were', 'will', 'with'
+    }
     try:
-        tokens = word_tokenize(query.lower())
-        stop_words = set(stopwords.words('english'))
-        keywords = [t for t in tokens if t.isalnum() and t not in stop_words]
+        # Split query into words, remove punctuation, and filter stop words
+        words = re.findall(r'\b\w+\b', query.lower())
+        keywords = [w for w in words if w not in stop_words]
         logging.info(f"🔍 Preprocessed query keywords: {keywords}")
-        return keywords
+        return keywords if keywords else query.lower().split()
     except Exception as e:
         logging.error(f"❌ Query preprocessing failed: {e}")
         return query.lower().split()
@@ -95,7 +89,6 @@ def extract_from_pdf(file_path: str, query: str) -> str:
             text = ""
             for page_num, page in enumerate(reader.pages, 1):
                 page_text = page.extract_text() or ""
-                # Check if any keyword appears in the page
                 if any(re.search(rf'\b{k}\b', page_text.lower(), re.IGNORECASE) for k in keywords):
                     text += f"\n[Page {page_num}]:\n{page_text}\n"
             if text:
@@ -114,7 +107,6 @@ def extract_from_csv(file_path: str, query: str) -> str:
     try:
         keywords = preprocess_query(query)
         df = pd.read_csv(file_path)
-        # Filter rows where any column contains any keyword
         matches = df[df.apply(lambda row: any(
             any(re.search(rf'\b{k}\b', str(val).lower(), re.IGNORECASE) for k in keywords)
             for val in row
@@ -214,7 +206,7 @@ async def freshdesk_webhook(request: Request):
         payload = await request.json()
         logging.info("📩 Incoming Freshdesk payload: %s", json.dumps(payload, ensure_ascii=False))
     except Exception as e:
-        logging.exception("❌ Failed to parse JSON payload: %s", e)
+        logging.exception("❌ Failed to parse JSON payload: {e}")
         return {"ok": False, "error": "invalid JSON"}
 
     event_type = payload.get("eventType", "").lower()
@@ -222,7 +214,7 @@ async def freshdesk_webhook(request: Request):
     is_conversation_create = event_type == "onconversationcreate"
 
     if not (is_ticket_create or is_conversation_create):
-        logging.warning("⚠️ Unsupported event type: %s", event_type)
+        logging.warning("⚠️ Unsupported event type: {event_type}")
         return {"ok": True, "skipped": True, "reason": "unsupported event"}
 
     ticket = payload.get("ticket") or payload
@@ -231,7 +223,7 @@ async def freshdesk_webhook(request: Request):
     description = ticket.get("description", "") or payload.get("conversation", {}).get("body_text", "")
 
     requester_email = extract_requester_email(payload)
-    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s", ticket_id, requester_email)
+    logging.info("🔹 Extracted ticket_id: {ticket_id}, requester_email: {requester_email}")
 
     if not ticket_id:
         logging.error("❌ Ticket id missing in payload")
@@ -242,14 +234,14 @@ async def freshdesk_webhook(request: Request):
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
     if requester_email.lower() != TEST_EMAIL.lower():
-        logging.info("⏭️ Ignored ticket %s from %s (not test email)", ticket_id, requester_email)
+        logging.info("⏭️ Ignored ticket {ticket_id} from {requester_email} (not test email)")
         return {"ok": True, "skipped": True, "reason": "non-test email"}
 
     try:
         master_id = get_master_ticket_id(ticket_id)
-        logging.info("🔀 Master ticket id: %s", master_id)
+        logging.info("🔀 Master ticket id: {master_id}")
     except Exception as e:
-        logging.exception("❌ Failed to get master ticket id: %s", e)
+        logging.exception("❌ Failed to get master ticket id: {e}")
         master_id = ticket_id
 
     # Extract KB content with enhanced query
@@ -264,9 +256,9 @@ async def freshdesk_webhook(request: Request):
         if csv_content:
             kb_content += f"\n=== CSV Knowledge Base ===\n{csv_content}\n"
     if kb_content:
-        logging.info("📚 Extracted KB content length: %d", len(kb_content))
+        logging.info("📚 Extracted KB content length: {len(kb_content)}")
     else:
-        logging.warning("⚠️ No KB content extracted for query: %s", query_terms[:50])
+        logging.warning("⚠️ No KB content extracted for query: {query_terms[:50]}")
 
     # AI classification with strict KB enforcement
     system_prompt = (
@@ -295,10 +287,10 @@ async def freshdesk_webhook(request: Request):
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
         assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
-        logging.info("🤖 OpenAI raw response: %s", assistant_text)
+        logging.info("🤖 OpenAI raw response: {assistant_text}")
         parsed = json.loads(assistant_text)
     except Exception as e:
-        logging.exception("⚠️ OpenAI or JSON parse error: %s", e)
+        logging.exception("⚠️ OpenAI or JSON parse error: {e}")
         parsed = {
             "intent": "UNKNOWN",
             "confidence": 0.0,
@@ -333,18 +325,18 @@ async def freshdesk_webhook(request: Request):
 """
     try:
         post_freshdesk_note(master_id, note, private=True)
-        logging.info("✅ Posted private draft to ticket %s", master_id)
+        logging.info("✅ Posted private draft to ticket {master_id}")
     except Exception as e:
-        logging.exception("❌ Failed posting note: %s", e)
+        logging.exception("❌ Failed posting note: {e}")
 
     # Auto-reply if safe
     auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
     if auto_reply_ok:
         try:
             post_freshdesk_reply(master_id, parsed.get("reply_draft", ""))
-            logging.info("✅ Auto-replied to ticket %s", master_id)
+            logging.info("✅ Auto-replied to ticket {master_id}")
         except Exception as e:
-            logging.exception("❌ Failed posting auto-reply: %s", e)
+            logging.exception("❌ Failed posting auto-reply: {e}")
     else:
         logging.info("ℹ️ Auto-reply skipped (intent/setting)")
 
