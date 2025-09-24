@@ -68,7 +68,6 @@ def preprocess_query(query: str) -> list:
         'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the', 'to', 'was', 'were', 'will', 'with'
     }
     try:
-        # Split query into words, remove punctuation, and filter stop words
         words = re.findall(r'\b\w+\b', query.lower())
         keywords = [w for w in words if w not in stop_words]
         logging.info(f"🔍 Preprocessed query keywords: {keywords}")
@@ -79,12 +78,13 @@ def preprocess_query(query: str) -> list:
 
 def extract_from_pdf(file_path: str, query: str) -> str:
     """Extract relevant text from PDF using keyword matching."""
-    if not file_path or not os.path.exists(file_path):
-        logging.warning(f"⚠️ PDF file not found: {file_path}")
+    abs_path = os.path.abspath(file_path)
+    if not file_path or not os.path.exists(abs_path):
+        logging.warning(f"⚠️ PDF file not found at: {abs_path}")
         return ""
     try:
         keywords = preprocess_query(query)
-        with open(file_path, 'rb') as f:
+        with open(abs_path, 'rb') as f:
             reader = PyPDF2.PdfReader(f)
             text = ""
             for page_num, page in enumerate(reader.pages, 1):
@@ -92,39 +92,40 @@ def extract_from_pdf(file_path: str, query: str) -> str:
                 if any(re.search(rf'\b{k}\b', page_text.lower(), re.IGNORECASE) for k in keywords):
                     text += f"\n[Page {page_num}]:\n{page_text}\n"
             if text:
-                logging.info(f"📄 Extracted {len(text)} chars from PDF for query: {query[:50]}...")
+                logging.info(f"📄 Extracted {len(text)} chars from PDF at {abs_path} for query: {query[:50]}...")
                 return text[:4000]  # Limit to avoid token overflow
             return ""
     except Exception as e:
-        logging.error(f"❌ PDF extraction error: {e}")
+        logging.error(f"❌ PDF extraction error at {abs_path}: {e}")
         return ""
 
 def extract_from_csv(file_path: str, query: str) -> str:
     """Extract relevant rows from CSV using keyword matching."""
-    if not file_path or not os.path.exists(file_path):
-        logging.warning(f"⚠️ CSV file not found: {file_path}")
+    abs_path = os.path.abspath(file_path)
+    if not file_path or not os.path.exists(abs_path):
+        logging.warning(f"⚠️ CSV file not found at: {abs_path}")
         return ""
     try:
         keywords = preprocess_query(query)
-        df = pd.read_csv(file_path)
+        df = pd.read_csv(abs_path)
         matches = df[df.apply(lambda row: any(
             any(re.search(rf'\b{k}\b', str(val).lower(), re.IGNORECASE) for k in keywords)
             for val in row
         ), axis=1)]
         if not matches.empty:
             result = matches.to_string(index=False)
-            logging.info(f"📊 Extracted {len(result)} chars from CSV for query: {query[:50]}...")
+            logging.info(f"📊 Extracted {len(result)} chars from CSV at {abs_path} for query: {query[:50]}...")
             return result[:4000]
         return ""
     except Exception as e:
-        logging.error(f"❌ CSV extraction error: {e}")
+        logging.error(f"❌ CSV extraction error at {abs_path}: {e}")
         return ""
 
 def get_freshdesk_ticket(ticket_id: int) -> dict | None:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
     resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
     if resp.status_code != 200:
-        logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
+        logging.error(f"❌ Failed to fetch ticket {ticket_id}: {resp.text}")
         return None
     return resp.json()
 
@@ -134,7 +135,7 @@ def get_master_ticket_id(ticket_id: int) -> int:
         return ticket_id
     parent_id = ticket.get("merged_ticket_id") or ticket.get("custom_fields", {}).get("cf_parent_ticket_id")
     if parent_id:
-        logging.info("🔀 Ticket %s merged into %s", ticket_id, parent_id)
+        logging.info(f"🔀 Ticket {ticket_id} merged into {parent_id}")
         return parent_id
     return ticket_id
 
@@ -155,7 +156,7 @@ def extract_requester_email(payload: dict) -> str:
     Robust extraction of requester email from payload for both ticket creation and replies
     Handles onTicketCreate and onConversationCreate webhook structures
     """
-    logging.info("🔍 Payload for email extraction: %s", json.dumps(payload, ensure_ascii=False))
+    logging.info(f"🔍 Payload for email extraction: {json.dumps(payload, ensure_ascii=False)}")
     ticket = payload.get("ticket") or payload
     conversation = payload.get("conversation") or {}
 
@@ -204,9 +205,9 @@ def health():
 async def freshdesk_webhook(request: Request):
     try:
         payload = await request.json()
-        logging.info("📩 Incoming Freshdesk payload: %s", json.dumps(payload, ensure_ascii=False))
+        logging.info(f"📩 Incoming Freshdesk payload: {json.dumps(payload, ensure_ascii=False)}")
     except Exception as e:
-        logging.exception("❌ Failed to parse JSON payload: {e}")
+        logging.exception(f"❌ Failed to parse JSON payload: {e}")
         return {"ok": False, "error": "invalid JSON"}
 
     event_type = payload.get("eventType", "").lower()
@@ -214,7 +215,7 @@ async def freshdesk_webhook(request: Request):
     is_conversation_create = event_type == "onconversationcreate"
 
     if not (is_ticket_create or is_conversation_create):
-        logging.warning("⚠️ Unsupported event type: {event_type}")
+        logging.warning(f"⚠️ Unsupported event type: {event_type}")
         return {"ok": True, "skipped": True, "reason": "unsupported event"}
 
     ticket = payload.get("ticket") or payload
@@ -223,7 +224,7 @@ async def freshdesk_webhook(request: Request):
     description = ticket.get("description", "") or payload.get("conversation", {}).get("body_text", "")
 
     requester_email = extract_requester_email(payload)
-    logging.info("🔹 Extracted ticket_id: {ticket_id}, requester_email: {requester_email}")
+    logging.info(f"🔹 Extracted ticket_id: {ticket_id}, requester_email: {requester_email}")
 
     if not ticket_id:
         logging.error("❌ Ticket id missing in payload")
@@ -234,14 +235,14 @@ async def freshdesk_webhook(request: Request):
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
     if requester_email.lower() != TEST_EMAIL.lower():
-        logging.info("⏭️ Ignored ticket {ticket_id} from {requester_email} (not test email)")
+        logging.info(f"⏭️ Ignored ticket {ticket_id} from {requester_email} (not test email)")
         return {"ok": True, "skipped": True, "reason": "non-test email"}
 
     try:
         master_id = get_master_ticket_id(ticket_id)
-        logging.info("🔀 Master ticket id: {master_id}")
+        logging.info(f"🔀 Master ticket id: {master_id}")
     except Exception as e:
-        logging.exception("❌ Failed to get master ticket id: {e}")
+        logging.exception(f"❌ Failed to get master ticket id: {e}")
         master_id = ticket_id
 
     # Extract KB content with enhanced query
@@ -256,15 +257,15 @@ async def freshdesk_webhook(request: Request):
         if csv_content:
             kb_content += f"\n=== CSV Knowledge Base ===\n{csv_content}\n"
     if kb_content:
-        logging.info("📚 Extracted KB content length: {len(kb_content)}")
+        logging.info(f"📚 Extracted KB content length: {len(kb_content)}")
     else:
-        logging.warning("⚠️ No KB content extracted for query: {query_terms[:50]}")
+        logging.warning(f"⚠️ No KB content extracted for query: {query_terms[:50]}")
 
     # AI classification with strict KB enforcement
     system_prompt = (
         "You are a customer support assistant. Respond in English only. "
         "You MUST use the provided Knowledge Base (KB) content to answer all specific details (e.g., fees, duration, certification). "
-        "If the KB lacks relevant information, explicitly state: 'The knowledge base does not contain this information. Please contact support.' "
+        "If the KB lacks relevant information or is empty, explicitly state: 'The knowledge base does not contain this information. Please contact support.' "
         "Do NOT invent or assume details not in the KB. "
         "Use common sense for general responses but prioritize KB accuracy. "
         "Return JSON with: intent (one word, e.g., COURSE_INQUIRY), confidence (0-1), summary (2-3 lines), "
@@ -280,23 +281,23 @@ async def freshdesk_webhook(request: Request):
         f"Subject: {subject}\n"
         f"Body: {description}\n\n"
         f"=== Knowledge Base Context ===\n"
-        f"{kb_content if kb_content else 'No relevant KB content found.'}\n\n"
+        f"{kb_content if kb_content else 'No relevant KB content found. Please contact support for further assistance.'}\n\n"
         "Return valid JSON only."
     )
 
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
         assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
-        logging.info("🤖 OpenAI raw response: {assistant_text}")
+        logging.info(f"🤖 OpenAI raw response: {assistant_text}")
         parsed = json.loads(assistant_text)
     except Exception as e:
-        logging.exception("⚠️ OpenAI or JSON parse error: {e}")
+        logging.exception(f"⚠️ OpenAI or JSON parse error: {e}")
         parsed = {
             "intent": "UNKNOWN",
             "confidence": 0.0,
             "summary": description[:200],
             "sentiment": "UNKNOWN",
-            "reply_draft": "Dear Customer,\n\nWe could not process your request due to an error. Please contact support.\n\nBest regards,\nSupport Team",
+            "reply_draft": f"Dear {payload.get('requester', {}).get('name', 'Customer')},\n\nWe could not process your request due to an error. Please contact support.\n\nBest regards,\nSupport Team",
             "kb_suggestions": []
         }
 
@@ -325,18 +326,18 @@ async def freshdesk_webhook(request: Request):
 """
     try:
         post_freshdesk_note(master_id, note, private=True)
-        logging.info("✅ Posted private draft to ticket {master_id}")
+        logging.info(f"✅ Posted private draft to ticket {master_id}")
     except Exception as e:
-        logging.exception("❌ Failed posting note: {e}")
+        logging.exception(f"❌ Failed posting note: {e}")
 
     # Auto-reply if safe
     auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
     if auto_reply_ok:
         try:
             post_freshdesk_reply(master_id, parsed.get("reply_draft", ""))
-            logging.info("✅ Auto-replied to ticket {master_id}")
+            logging.info(f"✅ Auto-replied to ticket {master_id}")
         except Exception as e:
-            logging.exception("❌ Failed posting auto-reply: {e}")
+            logging.exception(f"❌ Failed posting auto-reply: {e}")
     else:
         logging.info("ℹ️ Auto-reply skipped (intent/setting)")
 
@@ -350,3 +351,4 @@ async def freshdesk_webhook(request: Request):
         "auto_reply": auto_reply_ok,
         "event_type": event_type
     }
+    
