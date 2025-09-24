@@ -24,7 +24,7 @@ SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COUR
 TEST_EMAIL = "komalsiddharth814@gmail.com".lower()  # Only this email is processed
 
 KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "courses.csv")  # Default to courses.csv as per requirements
-KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF","faq.pdf")  # Optional, e.g., "faqs.pdf"
+KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF",faq.pdf")  # Optional, e.g., "faqs.pdf"
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -232,6 +232,8 @@ async def freshdesk_webhook(request: Request):
     confidence = parsed.get("confidence", 0.0)
     is_payment_issue = "PAYMENT" in intent or "BILLING" in intent  # More flexible match
 
+    logging.info("AI intent: %s, confidence: %f, is_payment: %s", intent, confidence, is_payment_issue)
+
     # Build draft note
     note = f"""**🤖 AI Assist (draft)**
 
@@ -258,7 +260,7 @@ async def freshdesk_webhook(request: Request):
         logging.exception("❌ Failed posting note: %s", e)
 
     # Auto-reply if safe
-    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and (confidence >= AUTO_REPLY_CONFIDENCE or requester_email == TEST_EMAIL)
     if auto_reply_ok:
         try:
             post_freshdesk_reply(master_id, parsed.get("reply_draft", ""))
