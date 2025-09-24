@@ -378,7 +378,7 @@ Course details provided: {course_details}. Integrate ALL fields as bullet points
     logging.info("🧠 AI Classification: Intent=%s, Confidence=%.2f", intent, confidence)
     is_payment_issue = intent in ["BILLING", "PAYMENT"]
 
-    note = f"""**🤖 AI Assist (draft)**
+    note = f"""** AI Assist (draft)**
 
 **Ticket ID:** {ticket_id} | **Master ID:** {master_id}
 **Customer:** {customer_name} | **Email:** {requester_email}
@@ -434,4 +434,5 @@ Course details provided: {course_details}. Integrate ALL fields as bullet points
         "customer_name": customer_name
     }
     return sanitize_dict(response_data)
+
 
