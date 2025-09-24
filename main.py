@@ -341,19 +341,15 @@ Return valid JSON only with these keys:
 - reply_draft (MUST follow EXACT HTML format below with <br> for line breaks; insert course details as bullet points in {{message_body}})
 - kb_suggestions (list of 3 short titles or URLs)
 
-=== EXACT REPLY DRAFT FORMAT ===
-Copy verbatim, replace {{customer_name}} with provided name, insert course details as bullet points in {{message_body}} (e.g., '<li>Course Name: Wealth Mastery</li><li>Fees: Rs. 15000</li>'):
-
-Hi {{customer_name}},<br><br>
-Thank you for reaching out to us,<br><br>
-This is Rahul from Team IMK, we are here to help you.<br><br>
-{{message_body}}<br><br>
-If you have any course-related technical questions, please email us at contact@miteshkhatri.com.<br>
-Our team is happy to help!<br><br>
-Thanks & Regards,<br>
-Rahul<br>
-Team IMK<br>
-<img src='https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8' alt='IMK Team' style='width:200px;height:auto;'><br>
+=== EXACT REPLY_DRAFT TEMPLATE (use placeholders) ===
+<div>
+  Hi {{customer_name}},<br><br>
+  Thank you for reaching out.<br><br>
+  {{message_body}}<br><br>
+  Best regards,<br>
+  IMK Support Team
+</div>
+"""
 
 Course details provided: {course_details}. Integrate ALL fields as bullet points in {{message_body}} if query matches course_name (e.g., '<li>Course Name: Wealth Mastery</li><li>Fees: Rs. 15000</li><li>Link: https://miteshkhatri.com/JoinALOA</li><li>Certificate: No</li><li>Notes: None</li>'). For BILLING, include: 'Your query has been escalated to our billing team for prompt resolution.'""".format(course_details=json.dumps(course_details) if possible_course else "No specific course details available.")
     user_prompt = f"Ticket subject:\n{subject}\n\nTicket body:\n{description}\n\nCustomer Name: {customer_name}\n\nReturn valid JSON only."
@@ -438,3 +434,4 @@ Course details provided: {course_details}. Integrate ALL fields as bullet points
         "customer_name": customer_name
     }
     return sanitize_dict(response_data)
+
