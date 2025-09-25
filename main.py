@@ -23,6 +23,9 @@ AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
 TEST_EMAIL = "komalsiddharth814@gmail.com".lower()  # Only this email is processed
 
+PAYMENT_AGENT_ID = int(os.getenv("PAYMENT_AGENT_ID", "0"))  # Agent ID for payment issues
+PAYMENT_AGENT_EMAIL = os.getenv("PAYMENT_AGENT_EMAIL", "wathorerahul@yahoo.com")  # Agent email for logging/note
+
 KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "courses.csv")  # Default to courses.csv
 KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF", "faq.pdf")  # Optional PDF
 
@@ -107,7 +110,15 @@ def get_master_ticket_id(ticket_id: int, ticket: dict = None) -> int:
         logging.info("🔀 Ticket %s merged into %s", ticket_id, parent_id)
         return parent_id
     return ticket_id
-
+def update_freshdesk_ticket(ticket_id: int, updates: dict) -> bool:
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
+    resp = requests.put(url, auth=(FRESHDESK_API_KEY, "X"), json=updates, timeout=20)
+    if resp.status_code != 200:
+        logging.error("❌ Failed to update ticket %s: %s", ticket_id, resp.text)
+        return False
+    logging.info("✅ Updated ticket %s with: %s", ticket_id, updates)
+    return True
+    
 def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
     resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
@@ -254,7 +265,16 @@ GENERAL QUERY TEMPLATE (HTML):
     intent = parsed.get("intent", "UNKNOWN").upper()
     confidence = parsed.get("confidence", 0.0)
     is_payment_issue = "PAYMENT" in intent or "BILLING" in intent
-
+    # Handle payment issues: assign high priority and agent
+    assignment_info = ""
+    if is_payment_issue and PAYMENT_AGENT_ID > 0:
+        updates = {
+            "priority": 3,  # High priority in Freshdesk
+            "assignee_id": PAYMENT_AGENT_ID
+        }
+        if update_freshdesk_ticket(master_id, updates):
+            assignment_info = f"\n**Assigned to:** {PAYMENT_AGENT_EMAIL} (ID: {PAYMENT_AGENT_ID})\n**Priority:** High"
+            
     # Post private draft note
     note = f"""**🤖 AI Assist Draft**
 Intent: {intent}
@@ -287,6 +307,7 @@ Draft Reply:
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
 
 
 
