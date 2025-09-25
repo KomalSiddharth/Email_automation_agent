@@ -232,7 +232,7 @@ GENERAL QUERY TEMPLATE (HTML):
 <p>[Insert professional AI reply here: use short, clear paragraphs and <ul><li> bullets where appropriate.]</p>
 <p>If you have further questions, feel free to ask.</p>
 <p>Thanks & Regards,<br>Rahul<br>Team IMK<br>
-<img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" /></p>
+<p><img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" /></p>
 """
 
     user_prompt = f"Customer: {requester_name}\nSubject: {subject}\nBody: {description}\n\nKnowledge Base:\n{kb_content}\n\nReturn valid JSON only."
@@ -288,4 +288,5 @@ Draft Reply:
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
 
