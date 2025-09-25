@@ -170,33 +170,69 @@ async def freshdesk_webhook(request: Request):
     query_terms = f"{subject} {description}"
     kb_content = ""
     if KNOWLEDGE_BASE_PDF:
-        kb_content += "\nPDF Knowledge Base:\n" + extract_from_pdf(KNOWLEDGE_BASE_PDF, query_terms)
+       kb_content += "\nPDF Knowledge Base:\n" + extract_from_pdf(KNOWLEDGE_BASE_PDF, query_terms)
+
     if KNOWLEDGE_BASE_CSV:
-        kb_content += "\nCSV Knowledge Base:\n" + extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
+       kb_content += "\nCSV Knowledge Base:\n" + extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
+
+    if kb_content:
+       logging.info("📚 Extracted KB content length: %d", len(kb_content))
+    else:
+       logging.warning("⚠️ No KB content extracted; ensure files exist and are accessible.")
 
     # ---- FIXED SYSTEM PROMPT ----
     system_prompt = f"""
 You are a professional customer support assistant for Team IMK. Always respond in English only.
 
-STRICT RULES:
-- reply_draft must be HTML formatted (<p>, <br>, <ul><li>, <strong>).
-- Keep tone polite, professional, and helpful.
-- End every reply with:
+STRICT RULES for reply_draft formatting:
+- Output reply_draft as an HTML-formatted string for proper rendering in email systems like Freshdesk.
+  Use <p> for paragraphs, <br> for line breaks, <ul><li> for bullet points, and <strong> for bold text.
+- Keep tone polite, professional, and helpful at all times.
+- Use short paragraphs (2–3 lines max) for readability; use <br> for line breaks where needed.
+- For course-related queries:
+  - Present details clearly using HTML bullet points (<ul><li>Course Name: ...</li></ul> etc.).
+  - Include all relevant fields from the Knowledge Base (Fee, Enrollment Link, Certificate, Duration, Access, Other notes).
+  - Never invent or assume missing details.
+- For general queries (complaints, feedback, support requests):
+  - Use structured HTML paragraphs (<p>...</p>) and bullet points only where they improve clarity.
+- Always end emails with a warm closing in HTML:
   <p>Thanks & Regards,<br>Rahul<br>Team IMK<br>
-  <img src="https://indattachment.freshdesk.com/inline/attachment?token=..." alt="Team IMK Logo" /></p>
-- Never invent details not in Knowledge Base.
+  <img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" /></p>
+- Always use this HTML format for hyperlinks: <a href="https://example.com">Click Here</a>.
+- Never merge multiple pieces of information into one block; enforce structure using HTML tags.
+- Fallback: If the query cannot be answered from the Knowledge Base, politely acknowledge and suggest contacting support for further help.
 
-If course-related query → reply with bullet points (Course, Fee, Duration, Certificate, Link).
-If general query → reply in short HTML paragraphs with bullets only where useful.
-If info missing → politely say support will assist.
+OUTPUT REQUIREMENTS (JSON only):
+- intent (one word)
+- confidence (0–1)
+- summary (2–3 lines summarizing user query)
+- sentiment (Angry/Neutral/Positive)
+- reply_draft (string: well-formatted, polite HTML email)
+- kb_suggestions (list of short titles or URLs)
 
-Return ONLY JSON with:
-- intent
-- confidence
-- summary
-- sentiment
-- reply_draft
-- kb_suggestions
+COURSE-RELATED TEMPLATE (HTML):
+<p>Hi {requester_name},</p>
+<p>Thank you for reaching out. My name is Rahul from <strong>Team IMK</strong>, and I’ll be assisting you today. Please find the course details below:</p>
+<ul>
+<li>Course Name: <Course Name></li>
+<li>Course Fee: ₹<Fee></li>
+<li>Enrollment Link: <a href="<Link>">Click here to Enroll</a></li>
+<li>Certificate Provided: <Yes/No></li>
+<li>Access: <Lifetime/Other></li>
+<li>Duration: <Duration></li>
+<li>Other relevant details: <If applicable, in bullets></li>
+</ul>
+<p>If you have further questions, feel free to ask.</p>
+<p>Thanks & Regards,<br>Rahul<br>Team IMK<br>
+<img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" /></p>
+
+GENERAL QUERY TEMPLATE (HTML):
+<p>Hi {requester_name},</p>
+<p>Thank you for reaching out. My name is Rahul from <strong>Team IMK</strong>, and I’ll be assisting you today.</p>
+<p>[Insert professional AI reply here: use short, clear paragraphs and <ul><li> bullets where appropriate.]</p>
+<p>If you have further questions, feel free to ask.</p>
+<p>Thanks & Regards,<br>Rahul<br>Team IMK<br>
+<img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" /></p>
 """
 
     user_prompt = f"Customer: {requester_name}\nSubject: {subject}\nBody: {description}\n\nKnowledge Base:\n{kb_content}\n\nReturn valid JSON only."
@@ -252,3 +288,4 @@ Draft Reply:
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
