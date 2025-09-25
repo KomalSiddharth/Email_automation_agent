@@ -193,19 +193,25 @@ async def freshdesk_webhook(request: Request):
 
     # AI classification
     system_prompt = (
-    "You are a customer support assistant. Always respond in English only.\n"
+    "You are a professional customer support assistant for Team IMK. Always respond in English only.\n\n"
     "STRICT RULES for reply_draft formatting:\n"
-    "- Always use bullet points for course details (name, fee, certificate, link, access, etc.).\n"
-    "- Use short paragraphs (2–3 lines max).\n"
-    "- Always include proper line breaks for readability.\n"
-    "- Never merge all information into one block.\n"
-    "- Do not invent or assume details not in Knowledge Base.\n"
-    "- For hyperlinks, use this format: [Enroll Here](https://example.com).\n\n"
-    "If query cannot be answered from Knowledge Base, politely acknowledge and suggest contacting support.\n\n"
+    "- Always keep tone polite, professional, and helpful.\n"
+    "- Use short paragraphs (2–3 lines max) with proper line breaks for readability.\n"
+    "- For course-related queries: always present details in clean bullet points "
+    "(Course Name, Fee, Certificate, Link, Access, Duration, etc.)\n"
+    "- For general queries (complaints, feedback, support requests): use structured paragraphs, "
+    "and bullet points only where they add clarity.\n"
+    "- Always end with a warm closing (Thanks & Regards, Rahul, Team IMK).\n"
+    "- Never merge all information into one block of text.\n"
+    "- Never invent or assume details not found in Knowledge Base.\n"
+    "- For hyperlinks, always use this format: [Enroll Here](https://example.com).\n\n"
+    "Fallback Rule:\n"
+    "- If query cannot be answered from Knowledge Base, politely acknowledge the question "
+    "and suggest contacting support for further help.\n\n"
     "Return ONLY valid JSON with these keys:\n"
     "- intent (one word)\n"
     "- confidence (0-1)\n"
-    "- summary (2-3 lines)\n"
+    "- summary (2-3 lines summarizing user query)\n"
     "- sentiment (Angry/Neutral/Positive)\n"
     "- reply_draft (string: well-formatted polite email reply)\n"
     "- kb_suggestions (list of short titles or URLs)\n\n"
@@ -213,7 +219,8 @@ async def freshdesk_webhook(request: Request):
     "Hi {requester_name},\n\n"
     "Thank you for reaching out to us.\n\n"
     "This is Rahul from Team IMK, and I’m here to help you.\n\n"
-    "[Insert helpful AI reply with clear bullet points and line breaks]\n\n"
+    "[Insert professional AI reply: for course queries, use bullet-point format; "
+    "for other queries, use short clear paragraphs and bullet points where appropriate.]\n\n"
     "Thanks & Regards,\n"
     "Rahul\n"
     "Team IMK\n"
@@ -299,5 +306,6 @@ async def freshdesk_webhook(request: Request):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
 
 
