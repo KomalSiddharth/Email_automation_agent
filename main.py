@@ -23,8 +23,8 @@ AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
 TEST_EMAIL = "komalsiddharth814@gmail.com".lower()  # Only this email is processed
 
-KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "courses.csv")  # Default to courses.csv as per requirements
-KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF","faq.pdf")  # Optional, e.g., "faqs.pdf"
+KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "courses.csv")  # Default to courses.csv
+KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF", "faq.pdf")  # Optional PDF
 
 if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
     logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
@@ -68,7 +68,7 @@ def extract_from_pdf(file_path: str, query: str) -> str:
                 page_text = page.extract_text() or ""
                 if any(word in page_text.lower() for word in query_words):
                     text += page_text + "\n\n"
-            return text[:4000]  # Limit to avoid token overflow
+            return text[:4000]
     except Exception as e:
         logging.error(f"PDF extraction error: {e}")
         return ""
@@ -79,10 +79,8 @@ def extract_from_csv(file_path: str, query: str) -> str:
     try:
         df = pd.read_csv(file_path)
         query_words = query.lower().split()
-        # Filter rows where any column contains any word from the query
         matches = df[df.apply(lambda row: any(word in str(val).lower() for val in row for word in query_words), axis=1)]
         if matches.empty:
-            # If no matches but CSV is compulsory for certain topics, include full if keywords present
             compulsory_keywords = ["fees", "certificate", "links", "course"]
             if any(kw in query.lower() for kw in compulsory_keywords):
                 return df.to_string(index=False)[:4000]
@@ -142,7 +140,6 @@ async def freshdesk_webhook(request: Request):
         logging.exception("❌ Failed to parse JSON payload: %s", e)
         return {"ok": False, "error": "invalid JSON"}
 
-    # Extract ticket_id safely
     ticket = payload.get("ticket") or payload
     ticket_id = ticket.get("id") or payload.get("id") or ticket.get("ticket_id") or payload.get("ticket_id")
 
@@ -150,7 +147,6 @@ async def freshdesk_webhook(request: Request):
         logging.error("❌ Ticket id missing in payload")
         return {"ok": False, "error": "ticket id not found"}
 
-    # Fetch full ticket details immediately to get accurate requester info
     full_ticket = get_freshdesk_ticket(ticket_id)
     if not full_ticket:
         logging.error("❌ Failed to fetch full ticket details for %s", ticket_id)
@@ -161,99 +157,53 @@ async def freshdesk_webhook(request: Request):
     subject = full_ticket.get("subject", "")
     description = full_ticket.get("description", "")
 
-    logging.info("🔹 Extracted ticket_id: %s, requester_email: %s, requester_name: %s", ticket_id, requester_email, requester_name)
-
     if not requester_email:
-        logging.warning("⚠️ Requester email missing even from API, skipping auto-reply")
+        logging.warning("⚠️ Requester email missing, skipping auto-reply")
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
     if requester_email != TEST_EMAIL:
         logging.info("⏭️ Ignored ticket %s from %s (testing phase)", ticket_id, requester_email)
         return {"ok": True, "skipped": True}
 
-    # Get master ticket ID
-    try:
-        master_id = get_master_ticket_id(ticket_id, full_ticket)
-        logging.info("🔀 Master ticket id: %s", master_id)
-    except Exception as e:
-        logging.exception("❌ Failed to get master ticket id: %s", e)
-        master_id = ticket_id
+    master_id = get_master_ticket_id(ticket_id, full_ticket)
 
-    # Extract KB content compulsorily for fees, certificate, links, course
-    query_terms = f"{subject} {description}"  # Use ticket content as query
+    query_terms = f"{subject} {description}"
     kb_content = ""
     if KNOWLEDGE_BASE_PDF:
         kb_content += "\nPDF Knowledge Base:\n" + extract_from_pdf(KNOWLEDGE_BASE_PDF, query_terms)
     if KNOWLEDGE_BASE_CSV:
-        kb_content += "\nCSV Knowledge Base (fees, certificates, links, courses):\n" + extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
-    if kb_content:
-        logging.info("📚 Extracted KB content length: %d", len(kb_content))
-    else:
-        logging.warning("⚠️ No KB content extracted; ensure files exist and are accessible.")
+        kb_content += "\nCSV Knowledge Base:\n" + extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
 
-    # AI classification
-    system_prompt = f"""You are a professional customer support assistant for Team IMK. Always respond in English only.
+    # ---- FIXED SYSTEM PROMPT ----
+    system_prompt = f"""
+You are a professional customer support assistant for Team IMK. Always respond in English only.
 
-STRICT RULES for reply_draft formatting:
-- Output reply_draft as HTML-formatted string for proper rendering in email systems like Freshdesk (use <p> for paragraphs, <br> for line breaks, <ul><li> for bullet points, <strong> for bold text).
-- Always keep tone polite, professional, and helpful.
-- Use short paragraphs (2–3 lines max) with proper HTML breaks for readability.
-- For course-related queries: always present details in clean HTML bullet points (<ul><li>Course Name: ...</li></ul> etc.).
-- For general queries (complaints, feedback, support requests): use structured HTML paragraphs (<p>...</p>), and <ul><li> bullet points only where they add clarity.
-- Always end with a warm closing in HTML (Thanks & Regards,<br>Rahul<br>Team IMK).
-- Never merge all information into one block of text—use HTML tags to enforce structure.
-- Never invent or assume details not found in Knowledge Base.
-- For hyperlinks, always use this HTML format: <a href=\\"https://example.com\\">Enroll Here</a>.
+STRICT RULES:
+- reply_draft must be HTML formatted (<p>, <br>, <ul><li>, <strong>).
+- Keep tone polite, professional, and helpful.
+- End every reply with:
+  <p>Thanks & Regards,<br>Rahul<br>Team IMK<br>
+  <img src="https://indattachment.freshdesk.com/inline/attachment?token=..." alt="Team IMK Logo" /></p>
+- Never invent details not in Knowledge Base.
 
-Fallback Rule:
-- If query cannot be answered from Knowledge Base, politely acknowledge the question and suggest contacting support for further help.
+If course-related query → reply with bullet points (Course, Fee, Duration, Certificate, Link).
+If general query → reply in short HTML paragraphs with bullets only where useful.
+If info missing → politely say support will assist.
 
-Return ONLY valid JSON with these keys:
-- intent (one word)
-- confidence (0-1)
-- summary (2-3 lines summarizing user query)
-- sentiment (Angry/Neutral/Positive)
-- reply_draft (string: well-formatted polite email reply in HTML)
-- kb_suggestions (list of short titles or URLs)
+Return ONLY JSON with:
+- intent
+- confidence
+- summary
+- sentiment
+- reply_draft
+- kb_suggestions
+"""
 
-Reply_draft template for course-related queries (output as HTML):
-<p>Hi {requester_name},</p>
-<p>Thank you for reaching out to us. My name is Rahul from <strong>Team IMK</strong>, and I’ll be assisting you today. Please find the course details below:</p>
-<ul>
-<li>Course Name: <Course Name></li>
-<li>Course Fee: ₹<Fee></li>
-<li>Enrollment Link: <a href=\\"<Link>\\">Click here to Enroll</a></li>
-<li>Certificate Provided: <Yes/No></li>
-<li>Access: <Lifetime/Other></li>
-<li>Duration: <Duration></li>
-<li>Other relevant details: <If applicable, in bullets></li>
-</ul>
-<p>If you have any further questions, feel free to ask.</p>
-<p>Thanks & Regards,<br>
-Rahul<br>
-Team IMK<br>
-<img src=\\"https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8\\" alt=\\"Team IMK Logo\\" /></p>
-
-Reply_draft template for general queries (output as HTML):
-<p>Hi {requester_name},</p>
-<p>Thank you for reaching out to us. My name is Rahul from <strong>Team IMK</strong>, and I’ll be assisting you today.</p>
-<p>[Insert professional AI reply: use short clear paragraphs and <ul><li> bullet points where appropriate.]</p>
-<p>If you have any further questions, feel free to ask.</p>
-<p>Thanks & Regards,<br>
-Rahul<br>
-Team IMK<br>
-<img src=\\"https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8\\" alt=\\"Team IMK Logo\\" /></p>"""
-).format(requester_name=requester_name)
-  # Inject name into template
-    user_prompt = f"Customer Name: {requester_name}\nTicket subject:\n{subject}\n\nTicket body:\n{description}\n\n"
-    if kb_content:
-        user_prompt += f"Knowledge Base Context:\n{kb_content}\n\n"
-    user_prompt += "Return valid JSON only."
+    user_prompt = f"Customer: {requester_name}\nSubject: {subject}\nBody: {description}\n\nKnowledge Base:\n{kb_content}\n\nReturn valid JSON only."
 
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
         assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
-        logging.info("🤖 OpenAI raw response: %s", assistant_text)
         parsed = json.loads(assistant_text)
     except Exception as e:
         logging.exception("⚠️ OpenAI or JSON parse error: %s", e)
@@ -262,58 +212,36 @@ Team IMK<br>
             "confidence": 0.0,
             "summary": description[:200],
             "sentiment": "UNKNOWN",
-            "reply_draft": "Hi {requester_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you\n\nThank you for your inquiry. Our support team will get back to you soon with more details.\n\nThanks & Regards\nRahul\nTeam IMK\n<img src=\"https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8\"/>".format(requester_name=requester_name),
+            "reply_draft": f"<p>Hi {requester_name},</p><p>Thank you for your inquiry. Our support team will get back to you soon.</p><p>Thanks & Regards,<br>Rahul<br>Team IMK</p>",
             "kb_suggestions": []
         }
 
     intent = parsed.get("intent", "UNKNOWN").upper()
     confidence = parsed.get("confidence", 0.0)
-    is_payment_issue = "PAYMENT" in intent or "BILLING" in intent  # More flexible match
+    is_payment_issue = "PAYMENT" in intent or "BILLING" in intent
 
-    logging.info("AI intent: %s, confidence: %f, is_payment: %s", intent, confidence, is_payment_issue)
-
-    # Build draft note
-    note = f"""**🤖 AI Assist (draft)**
-
-**Intent:** {intent}
-**Confidence:** {confidence}
-
-**Sentiment:** {parsed.get('sentiment')}
-
-**Summary:**
-{parsed.get('summary')}
-
-**Draft Reply:**
+    # Post private draft note
+    note = f"""**🤖 AI Assist Draft**
+Intent: {intent}
+Confidence: {confidence}
+Summary: {parsed.get('summary')}
+Sentiment: {parsed.get('sentiment')}
+Draft Reply:
 {parsed.get('reply_draft')}
-
-**KB Suggestions:**
-{json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
-
-{"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
 """
     try:
         post_freshdesk_note(master_id, note, private=True)
-        logging.info("✅ Posted private draft to ticket %s", master_id)
     except Exception as e:
         logging.exception("❌ Failed posting note: %s", e)
 
-    # Auto-reply logic: For test email, always auto-reply if not payment issue, regardless of intent/confidence
-    auto_reply_ok = False
-    if requester_email == TEST_EMAIL:
-        auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue
-        logging.info("🔧 Test email detected - forcing auto-reply (if not payment)")
-    else:
-        auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+    # Auto-reply logic
+    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and (requester_email == TEST_EMAIL or (intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE))
 
     if auto_reply_ok:
         try:
-            reply_body = parsed.get("reply_draft", "Hi {requester_name},\n\nThank you for reaching out to us,\n\nThis is Rahul from team IMK, We are here to help you\n\nThank you for your inquiry. Our support team will get back to you soon with more details.\n\nThanks & Regards\nRahul\nTeam IMK\n<img src=\"https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaWluaW5nbGxwLmZyZXNoZGVzay5jb20iLCJhY2NvdW50X2lkIjozMjM2MTA4fQ.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8\"/>".format(requester_name=requester_name))
-            post_freshdesk_reply(master_id, reply_body)
-            logging.info("✅ Auto-replied to ticket %s", master_id)
+            post_freshdesk_reply(master_id, parsed.get("reply_draft"))
         except Exception as e:
             logging.exception("❌ Failed posting auto-reply: %s", e)
-    else:
-        logging.info("ℹ️ Auto-reply skipped (intent/setting)")
 
     return {
         "ok": True,
@@ -324,9 +252,3 @@ Team IMK<br>
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
-
-
-
-
-
-
