@@ -264,7 +264,7 @@ GENERAL QUERY TEMPLATE (HTML):
 
     intent = parsed.get("intent", "UNKNOWN").upper()
     confidence = parsed.get("confidence", 0.0)
-    is_payment_issue = "PAYMENT" in intent or "BILLING" in intent
+    is_payment_issue = "PAYMENT" in intent or "BILLING" in intent or "REFUND" in intent
     # Handle payment issues: assign high priority and agent
     assignment_info = ""
     if is_payment_issue and PAYMENT_AGENT_ID > 0:
@@ -307,6 +307,7 @@ Draft Reply:
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
 
 
 
