@@ -42,7 +42,7 @@ def extract_requester_name(payload: dict) -> str:
         return ticket["contact"]["name"]
     if "requester_name" in ticket:
         return ticket["requester_name"]
-    return "Unknown"
+    return "Customer"
 
 def extract_from_pdf(file_path: str) -> str:
     try:
@@ -86,18 +86,28 @@ def call_openai(prompt: str) -> str:
         return result["choices"][0]["message"]["content"]
     except Exception as e:
         logging.error("OpenAI API error: %s", e)
-        return "Sorry, I couldn't generate a response."
+        return "Sorry, I couldn't generate a draft response at this time."
 
-def post_to_freshdesk(ticket_id: int, message: str):
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/reply"
+# --------------------------
+# Create Draft in Freshdesk
+# --------------------------
+def create_freshdesk_draft(ticket_id: int, draft_message: str):
+    """
+    This function creates a private note in Freshdesk ticket
+    so the agent can review and send manually.
+    """
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
     auth = (FRESHDESK_API_KEY, "X")
-    data = {"body": message}
+    data = {
+        "body": draft_message,
+        "private": True  # ensures it's a draft note, not visible to requester
+    }
     try:
         r = requests.post(url, auth=auth, json=data)
         r.raise_for_status()
-        logging.info("Reply sent to Freshdesk ticket %d", ticket_id)
+        logging.info("Draft note created for ticket #%d", ticket_id)
     except Exception as e:
-        logging.error("Error posting reply to Freshdesk: %s", e)
+        logging.error("Error creating draft note in Freshdesk: %s", e)
 
 # --------------------------
 # Webhook Endpoint
@@ -113,22 +123,38 @@ async def freshdesk_webhook(request: Request):
 
     logging.info("Processing ticket #%s from %s", ticket_id, requester_name)
 
-    # Example: Extract CSV KB content
+    # Extract CSV KB content
     kb_content = ""
     query_terms = ticket_description.split()[:5]  # simple term extraction
     if KNOWLEDGE_BASE_CSV and os.path.exists(KNOWLEDGE_BASE_CSV):
         kb_content = extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
-        logging.info("Extracted KB content length: %d", len(kb_content))
+        logging.info("KB content length: %d", len(kb_content))
 
-    # Combine ticket + KB for OpenAI
-    prompt = f"Requester: {requester_name}\nDescription: {ticket_description}\nKnowledge Base: {kb_content}\n\nRespond politely and professionally."
+    # If KB is empty, be polite
+    if not kb_content.strip():
+        kb_content = "Currently, we do not have a direct knowledge base article for this query. Please respond professionally."
+
+    # Prepare AI prompt
+    prompt = f"""
+You are a professional customer support agent.
+Requester Name: {requester_name}
+Ticket Description: {ticket_description}
+Knowledge Base: {kb_content}
+
+Generate a professional email draft to the customer including:
+- Greeting
+- Polite response using available KB info
+- Signature
+Keep it polite, professional, and helpful.
+"""
+
     ai_response = call_openai(prompt)
 
-    # Post back to Freshdesk
+    # Post as private draft note in Freshdesk
     if ticket_id:
-        post_to_freshdesk(ticket_id, ai_response)
+        create_freshdesk_draft(ticket_id, ai_response)
 
-    return JSONResponse({"status": "success", "ticket_id": ticket_id})
+    return JSONResponse({"status": "draft_created", "ticket_id": ticket_id})
 
 # --------------------------
 # Health Check / Root
