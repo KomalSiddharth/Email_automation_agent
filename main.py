@@ -110,6 +110,7 @@ def get_master_ticket_id(ticket_id: int, ticket: dict = None) -> int:
         logging.info("🔀 Ticket %s merged into %s", ticket_id, parent_id)
         return parent_id
     return ticket_id
+
 def update_freshdesk_ticket(ticket_id: int, updates: dict) -> bool:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
     resp = requests.put(url, auth=(FRESHDESK_API_KEY, "X"), json=updates, timeout=20)
@@ -121,7 +122,7 @@ def update_freshdesk_ticket(ticket_id: int, updates: dict) -> bool:
     
 def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
-    resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
+    resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body_html": body, "private": private}, timeout=20)
     resp.raise_for_status()
     return resp.json()
 
@@ -273,30 +274,32 @@ GENERAL QUERY TEMPLATE (HTML):
             "assignee_id": PAYMENT_AGENT_ID
         }
         if update_freshdesk_ticket(master_id, updates):
-            assignment_info = f"\n**Assigned to:** {PAYMENT_AGENT_EMAIL} (ID: {PAYMENT_AGENT_ID})\n**Priority:** High"
-            
-    # Post private draft note
-    note = f"""**🤖 AI Assist Draft**
-Intent: {intent}
-Confidence: {confidence}
-Summary: {parsed.get('summary')}
-Sentiment: {parsed.get('sentiment')}
-Draft Reply:
+            assignment_info = f"<p><strong>Assigned to:</strong> {PAYMENT_AGENT_EMAIL} (ID: {PAYMENT_AGENT_ID})</p><p><strong>Priority:</strong> High</p>"
+
+    # Post private draft note with buttons
+    note_message = "<p>⚠️ Payment-related issue → private draft only. Handle manually.</p>" if is_payment_issue else "<p>Note: AI draft — please review, edit, and send manually during testing phase.</p>"
+    note = f"""
+<h3>🤖 AI Assist Draft</h3>
+<p><strong>Intent:</strong> {intent}</p>
+<p><strong>Confidence:</strong> {confidence}</p>
+<p><strong>Summary:</strong> {parsed.get('summary')}</p>
+<p><strong>Sentiment:</strong> {parsed.get('sentiment')}</p>
+{assignment_info}
+<p><strong>Draft Reply:</strong></p>
 {parsed.get('reply_draft')}
+{note_message}
+<div style="margin-top: 20px;">
+<a href="https://{FRESHDESK_DOMAIN}/a/tickets/{master_id}" style="background-color: #2196F3; color: white; padding: 10px 20px; margin-right: 10px; text-decoration: none; border-radius: 5px;">Edit</a>
+<a href="https://{FRESHDESK_DOMAIN}/a/tickets/{master_id}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Share/Send</a>
+</div>
 """
     try:
         post_freshdesk_note(master_id, note, private=True)
     except Exception as e:
         logging.exception("❌ Failed posting note: %s", e)
 
-    # Auto-reply logic
-    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and (requester_email == TEST_EMAIL or (intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE))
-
-    if auto_reply_ok:
-        try:
-            post_freshdesk_reply(master_id, parsed.get("reply_draft"))
-        except Exception as e:
-            logging.exception("❌ Failed posting auto-reply: %s", e)
+    # No auto-reply sending during initial testing phase
+    auto_reply_ok = False
 
     return {
         "ok": True,
@@ -307,11 +310,3 @@ Draft Reply:
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
-
-
-
-
-
-
-
-
