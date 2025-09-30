@@ -296,11 +296,11 @@ GENERAL QUERY TEMPLATE (HTML):
     # Post private draft note with only the main reply draft (no intent/confidence/etc.), but keep buttons
     note_message = "<p>⚠️ Payment-related issue → private draft only. Handle manually.</p>" if is_payment_issue else "<p>Note: AI draft — please review, edit, and send manually during testing phase.</p>"
     note = f"""
-<h3>🤖 AI Assist Draft</h3>
+
 {assignment_info}
-<p><strong>Draft Reply:</strong></p>
+
 {parsed.get('reply_draft')}
-{note_message}
+
 <div style="margin-top: 20px;">
 <a href="https://{FRESHDESK_DOMAIN}/a/tickets/{master_id}" style="background-color: #2196F3; color: white; padding: 10px 20px; margin-right: 10px; text-decoration: none; border-radius: 5px;">Edit</a>
 <a href="https://{FRESHDESK_DOMAIN}/a/tickets/{master_id}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Share/Send</a>
@@ -323,3 +323,4 @@ GENERAL QUERY TEMPLATE (HTML):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
