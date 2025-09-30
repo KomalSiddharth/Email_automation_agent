@@ -122,7 +122,7 @@ def update_freshdesk_ticket(ticket_id: int, updates: dict) -> bool:
     
 def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
-    resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body_html": body, "private": private}, timeout=20)
+    resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
     resp.raise_for_status()
     return resp.json()
 
