@@ -15,244 +15,145 @@ load_dotenv()
 FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
 FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-
-ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "true").lower() == "true"
-AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
-SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
-TEST_EMAIL = "komalsiddharth814@gmail.com".lower()  # Only this email is processed
-
-PAYMENT_AGENT_ID = int(os.getenv("PAYMENT_AGENT_ID", "0"))  # Agent ID for payment issues
-PAYMENT_AGENT_EMAIL = os.getenv("PAYMENT_AGENT_EMAIL", "wathorerahul@yahoo.com")  # Agent email for logging/note
-
-KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "courses.csv")  # Default to courses.csv
-KNOWLEDGE_BASE_PDF = os.getenv("KNOWLEDGE_BASE_PDF", "faq.pdf")  # Optional PDF
-
-if not (FRESHDESK_DOMAIN and FRESHDESK_API_KEY and OPENAI_API_KEY):
-    logging.warning("❌ Missing required env vars: FRESHDESK_DOMAIN, FRESHDESK_API_KEY, OPENAI_API_KEY.")
+KNOWLEDGE_BASE_CSV = os.getenv("KNOWLEDGE_BASE_CSV", "")
 
 # --------------------------
-# App & Logging
+# FastAPI App
 # --------------------------
 app = FastAPI()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --------------------------
 # Helper Functions
 # --------------------------
-def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperature=0.0) -> dict:
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": OPENAI_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "temperature": temperature,
-        "max_tokens": max_tokens
-    }
-    response = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=30)
-    response.raise_for_status()
-    return response.json()
 
-def extract_from_pdf(file_path: str, query: str) -> str:
-    if not file_path or not os.path.exists(file_path):
+def extract_requester_name(payload: dict) -> str:
+    ticket = payload.get("ticket") or payload
+    if "requester" in ticket and "name" in ticket["requester"]:
+        return ticket["requester"]["name"]
+    if "contact" in ticket and "name" in ticket["contact"]:
+        return ticket["contact"]["name"]
+    if "requester_name" in ticket:
+        return ticket["requester_name"]
+    return "Customer"
+
+def extract_requester_email(payload: dict) -> str:
+    ticket = payload.get("ticket") or payload
+    if "requester" in ticket and "email" in ticket["requester"]:
+        return ticket["requester"]["email"]
+    if "contact" in ticket and "email" in ticket["contact"]:
+        return ticket["contact"]["email"]
+    if "requester_email" in ticket:
+        return ticket["requester_email"]
+    return ""
+
+def extract_ticket_subject(payload: dict) -> str:
+    ticket = payload.get("ticket") or payload
+    return ticket.get("subject", "No Subject")
+
+def extract_ticket_description(payload: dict) -> str:
+    ticket = payload.get("ticket") or payload
+    return ticket.get("description", "")
+
+def extract_from_csv(csv_file: str, query_terms: list) -> str:
+    if not csv_file or not os.path.exists(csv_file):
+        logging.warning("⚠️ CSV file not found: %s", csv_file)
         return ""
     try:
-        with open(file_path, 'rb') as f:
-            reader = PyPDF2.PdfReader(f)
-            text = ""
-            query_words = query.lower().split()
-            for page in reader.pages:
-                page_text = page.extract_text() or ""
-                if any(word in page_text.lower() for word in query_words):
-                    text += page_text + "\n\n"
-            return text[:4000]
+        df = pd.read_csv(csv_file)
+        kb_text = ""
+        for term in query_terms:
+            matches = df.apply(lambda row: term.lower() in row.to_string().lower(), axis=1)
+            for i, match in enumerate(matches):
+                if match:
+                    kb_text += "\n" + df.iloc[i].to_string()
+        return kb_text
     except Exception as e:
-        logging.error(f"PDF extraction error: {e}")
+        logging.error(f"❌ Error reading CSV: {e}")
         return ""
 
-def extract_from_csv(file_path: str, query: str) -> str:
-    if not file_path or not os.path.exists(file_path):
-        return ""
+def call_openai_api(prompt: str) -> str:
+    import openai
+    openai.api_key = OPENAI_API_KEY
     try:
-        df = pd.read_csv(file_path)
-        query_words = query.lower().split()
-        matches = df[df.apply(lambda row: any(word in str(val).lower() for val in row for word in query_words), axis=1)]
-        if matches.empty:
-            compulsory_keywords = ["fees", "certificate", "links", "course"]
-            if any(kw in query.lower() for kw in compulsory_keywords):
-                return df.to_string(index=False)[:4000]
-        return matches.to_string(index=False)[:4000]
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.7
+        )
+        assistant_text = response.choices[0].message.get("content", "").strip()
+        return assistant_text
     except Exception as e:
-        logging.error(f"CSV extraction error: {e}")
+        logging.error(f"❌ OpenAI API call failed: {e}")
         return ""
 
-def get_freshdesk_ticket(ticket_id: int) -> dict | None:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}?include=requester"
-    resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
-    if resp.status_code != 200:
-        logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
-        return None
-    return resp.json()
-
-def get_master_ticket_id(ticket_id: int, ticket: dict = None) -> int:
-    if not ticket:
-        ticket = get_freshdesk_ticket(ticket_id)
-    if not ticket:
-        return ticket_id
-    parent_id = ticket.get("merged_ticket_id") or ticket.get("custom_fields", {}).get("cf_parent_ticket_id")
-    if parent_id:
-        logging.info("🔀 Ticket %s merged into %s", ticket_id, parent_id)
-        return parent_id
-    return ticket_id
-
-def update_freshdesk_ticket(ticket_id: int, updates: dict) -> bool:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
-    resp = requests.put(url, auth=(FRESHDESK_API_KEY, "X"), json=updates, timeout=20)
-    if resp.status_code != 200:
-        logging.error("❌ Failed to update ticket %s: %s", ticket_id, resp.text)
-        return False
-    logging.info("✅ Updated ticket %s with: %s", ticket_id, updates)
-    return True
-
-def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
-    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
-    resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
-    resp.raise_for_status()
-    return resp.json()
+def send_freshdesk_reply(ticket_id: int, reply_text: str) -> None:
+    url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/reply"
+    auth = (FRESHDESK_API_KEY, "X")
+    payload = {"body": reply_text}
+    try:
+        response = requests.post(url, auth=auth, json=payload)
+        if response.status_code in [200, 201]:
+            logging.info("✅ Reply sent successfully to ticket %s", ticket_id)
+        else:
+            logging.error("❌ Failed to send reply. Status code: %s, Response: %s",
+                          response.status_code, response.text)
+    except Exception as e:
+        logging.error(f"❌ Exception sending reply: {e}")
 
 # --------------------------
-# Routes
+# Webhook Endpoint
 # --------------------------
-@app.get("/")
-def root():
-    return {"message": "AI Email Automation Backend Running"}
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-@app.post("/freshdesk-webhook")
+@app.post("/freshdesk_webhook")
 async def freshdesk_webhook(request: Request):
     try:
         payload = await request.json()
-        logging.info("📩 Incoming Freshdesk payload: %s", json.dumps(payload, ensure_ascii=False))
     except Exception as e:
-        logging.exception("❌ Failed to parse JSON payload: %s", e)
-        return {"ok": False, "error": "invalid JSON"}
+        logging.error(f"❌ Failed to parse JSON payload: {e}")
+        raw_body = await request.body()
+        logging.info(f"Raw body: {raw_body}")
+        return {"status": "failed", "reason": "invalid JSON"}
 
-    ticket = payload.get("ticket") or payload
-    ticket_id = ticket.get("id") or payload.get("id") or ticket.get("ticket_id") or payload.get("ticket_id")
-
+    ticket_id = payload.get("ticket", {}).get("id") or payload.get("id")
     if not ticket_id:
-        logging.error("❌ Ticket id missing in payload")
-        return {"ok": False, "error": "ticket id not found"}
+        logging.warning("⚠️ Ticket ID not found in payload.")
+        return {"status": "failed", "reason": "no ticket ID"}
 
-    full_ticket = get_freshdesk_ticket(ticket_id)
-    if not full_ticket:
-        logging.error("❌ Failed to fetch full ticket details for %s", ticket_id)
-        return {"ok": False, "error": "failed to fetch ticket"}
+    requester_name = extract_requester_name(payload)
+    requester_email = extract_requester_email(payload)
+    subject = extract_ticket_subject(payload)
+    description = extract_ticket_description(payload)
 
-    requester_email = full_ticket.get("requester", {}).get("email", "").lower()
-    requester_name = full_ticket.get("requester", {}).get("name", "Customer")
-    subject = full_ticket.get("subject", "")
-    description = full_ticket.get("description", "")
+    logging.info(f"📩 Received ticket #{ticket_id} from {requester_name} ({requester_email})")
 
-    if not requester_email:
-        logging.warning("⚠️ Requester email missing, skipping auto-reply")
-        return {"ok": True, "skipped": True, "reason": "missing requester_email"}
-
-    if requester_email != TEST_EMAIL:
-        logging.info("⏭️ Ignored ticket %s from %s (testing phase)", ticket_id, requester_email)
-        return {"ok": True, "skipped": True}
-
-    master_id = get_master_ticket_id(ticket_id, full_ticket)
-
-    query_terms = f"{subject} {description}"
+    # Optionally extract CSV knowledge base content
     kb_content = ""
-    if KNOWLEDGE_BASE_PDF:
-       kb_content += "\nPDF Knowledge Base:\n" + extract_from_pdf(KNOWLEDGE_BASE_PDF, query_terms)
-
     if KNOWLEDGE_BASE_CSV:
-       kb_content += "\nCSV Knowledge Base:\n" + extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
+        query_terms = description.split()[:5]  # Example: first 5 words as query terms
+        kb_content = extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
+        if kb_content:
+            logging.info("📚 Extracted KB content length: %d", len(kb_content))
+        else:
+            logging.warning("⚠️ No KB content extracted")
 
-    if kb_content:
-       logging.info("📚 Extracted KB content length: %d", len(kb_content))
-    else:
-       logging.warning("⚠️ No KB content extracted; ensure files exist and are accessible.")
+    # Prepare prompt for OpenAI
+    prompt = f"""
+    You are a professional support assistant.
+    Ticket Subject: {subject}
+    Ticket Description: {description}
+    Requester Name: {requester_name}
+    Requester Email: {requester_email}
+    Knowledge Base: {kb_content}
+    Write a professional and polite reply to the ticket.
+    """
 
-    # ---- FIXED SYSTEM PROMPT ----
-    system_prompt = f"""
-You are a professional customer support assistant for Team IMK. Always respond in English only.
-... [same as before, unchanged] ...
-"""
+    assistant_text = call_openai_api(prompt)
+    if not assistant_text:
+        assistant_text = "Hello, we have received your ticket and will get back to you shortly."
 
-    user_prompt = f"Customer: {requester_name}\nSubject: {subject}\nBody: {description}\n\nKnowledge Base:\n{kb_content}\n\nReturn valid JSON only."
+    # Send reply
+    send_freshdesk_reply(ticket_id, assistant_text)
 
-    try:
-        ai_resp = call_openai(system_prompt, user_prompt)
-        assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
-        parsed = json.loads(assistant_text)
-    except Exception as e:
-        logging.exception("⚠️ OpenAI or JSON parse error: %s", e)
-        parsed = {
-            "intent": "UNKNOWN",
-            "confidence": 0.0,
-            "summary": description[:200],
-            "sentiment": "UNKNOWN",
-            "reply_draft": f"<p>Hi {requester_name},</p><p>Thank you for your inquiry. Our support team will get back to you soon.</p><p>Thanks & Regards,<br>Rahul<br>Team IMK</p>",
-            "kb_suggestions": []
-        }
-
-    intent = parsed.get("intent", "UNKNOWN").upper()
-    confidence = parsed.get("confidence", 0.0)
-    is_payment_issue = "PAYMENT" in intent or "BILLING" in intent or "REFUND" in intent
-    # Handle payment issues: assign high priority and agent
-    assignment_info = ""
-    if is_payment_issue and PAYMENT_AGENT_ID > 0:
-        updates = {
-            "priority": 3,  # High priority in Freshdesk
-            "assignee_id": PAYMENT_AGENT_ID
-        }
-        if update_freshdesk_ticket(master_id, updates):
-            assignment_info = f"\n**Assigned to:** {PAYMENT_AGENT_EMAIL} (ID: {PAYMENT_AGENT_ID})\n**Priority:** High"
-
-    # Post private draft note (Updated to indicate not sent)
-    note = f"""**🤖 AI Assist Draft (Not Sent)**
-Intent: {intent}
-Confidence: {confidence}
-Summary: {parsed.get('summary')}
-Sentiment: {parsed.get('sentiment')}
-
-👇 Suggested Draft Reply (agent must review & send manually):
-{parsed.get('reply_draft')}
-"""
-    try:
-        post_freshdesk_note(master_id, note, private=True)
-    except Exception as e:
-        logging.exception("❌ Failed posting note: %s", e)
-
-    # -----------------------------
-    # Auto-reply Disabled (Manual send only)
-    # -----------------------------
-    # auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and (requester_email == TEST_EMAIL or (intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE))
-    # if auto_reply_ok:
-    #     try:
-    #         post_freshdesk_reply(master_id, parsed.get("reply_draft"))
-    #     except Exception as e:
-    #         logging.exception("❌ Failed posting auto-reply: %s", e)
-
-    return {
-        "ok": True,
-        "ticket": ticket_id,
-        "master_ticket": master_id,
-        "intent": intent,
-        "confidence": confidence,
-        "requester_email": requester_email,
-        "auto_reply": False
-    }
+    return {"status": "success", "ticket_id": ticket_id}
