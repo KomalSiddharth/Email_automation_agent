@@ -55,9 +55,13 @@ def call_openai(system_prompt: str, user_prompt: str, max_tokens=600, temperatur
         "temperature": temperature,
         "max_tokens": max_tokens
     }
-    response = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=30)
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"❌ OpenAI API request failed: {e}")
+        raise
 
 def extract_from_pdf(file_path: str, query: str) -> str:
     if not file_path or not os.path.exists(file_path):
@@ -94,11 +98,13 @@ def extract_from_csv(file_path: str, query: str) -> str:
 
 def get_freshdesk_ticket(ticket_id: int) -> dict | None:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}?include=requester"
-    resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
-    if resp.status_code != 200:
-        logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, resp.text)
+    try:
+        resp = requests.get(url, auth=(FRESHDESK_API_KEY, "X"), timeout=20)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        logging.error("❌ Failed to fetch ticket %s: %s", ticket_id, e)
         return None
-    return resp.json()
 
 def get_master_ticket_id(ticket_id: int, ticket: dict = None) -> int:
     if not ticket:
@@ -113,24 +119,34 @@ def get_master_ticket_id(ticket_id: int, ticket: dict = None) -> int:
 
 def update_freshdesk_ticket(ticket_id: int, updates: dict) -> bool:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
-    resp = requests.put(url, auth=(FRESHDESK_API_KEY, "X"), json=updates, timeout=20)
-    if resp.status_code != 200:
-        logging.error("❌ Failed to update ticket %s: %s", ticket_id, resp.text)
+    try:
+        resp = requests.put(url, auth=(FRESHDESK_API_KEY, "X"), json=updates, timeout=20)
+        resp.raise_for_status()
+        logging.info("✅ Updated ticket %s with: %s", ticket_id, updates)
+        return True
+    except requests.exceptions.RequestException as e:
+        logging.error("❌ Failed to update ticket %s: %s", ticket_id, e)
         return False
-    logging.info("✅ Updated ticket %s with: %s", ticket_id, updates)
-    return True
-    
+
 def post_freshdesk_note(ticket_id: int, body: str, private: bool = True) -> dict:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
-    resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body, "private": private}, timeout=20)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        logging.error(f"❌ Failed posting note to ticket {ticket_id}: {e}")
+        raise
 
 def post_freshdesk_reply(ticket_id: int, body: str) -> dict:
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/reply"
-    resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body}, timeout=20)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.post(url, auth=(FRESHDESK_API_KEY, "X"), json={"body": body}, timeout=20)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        logging.error(f"❌ Failed posting reply to ticket {ticket_id}: {e}")
+        raise
 
 # --------------------------
 # Routes
@@ -148,7 +164,7 @@ async def freshdesk_webhook(request: Request):
     try:
         payload = await request.json()
         logging.info("📩 Incoming Freshdesk payload: %s", json.dumps(payload, ensure_ascii=False))
-    except Exception as e:
+    except json.JSONDecodeError as e:
         logging.exception("❌ Failed to parse JSON payload: %s", e)
         return {"ok": False, "error": "invalid JSON"}
 
@@ -170,27 +186,27 @@ async def freshdesk_webhook(request: Request):
     description = full_ticket.get("description", "")
 
     if not requester_email:
-        logging.warning("⚠️ Requester email missing, skipping auto-reply")
+        logging.warning("⚠️ Requester email missing, skipping processing")
         return {"ok": True, "skipped": True, "reason": "missing requester_email"}
 
     if requester_email != TEST_EMAIL:
         logging.info("⏭️ Ignored ticket %s from %s (testing phase)", ticket_id, requester_email)
-        return {"ok": True, "skipped": True}
+        return {"ok": True, "skipped": True, "reason": "non-test email"}
 
     master_id = get_master_ticket_id(ticket_id, full_ticket)
 
     query_terms = f"{subject} {description}"
     kb_content = ""
     if KNOWLEDGE_BASE_PDF:
-       kb_content += "\nPDF Knowledge Base:\n" + extract_from_pdf(KNOWLEDGE_BASE_PDF, query_terms)
+        kb_content += "\nPDF Knowledge Base:\n" + extract_from_pdf(KNOWLEDGE_BASE_PDF, query_terms)
 
     if KNOWLEDGE_BASE_CSV:
-       kb_content += "\nCSV Knowledge Base:\n" + extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
+        kb_content += "\nCSV Knowledge Base:\n" + extract_from_csv(KNOWLEDGE_BASE_CSV, query_terms)
 
     if kb_content:
-       logging.info("📚 Extracted KB content length: %d", len(kb_content))
+        logging.info("📚 Extracted KB content length: %d", len(kb_content))
     else:
-       logging.warning("⚠️ No KB content extracted; ensure files exist and are accessible.")
+        logging.warning("⚠️ No KB content extracted; ensure files exist and are accessible.")
 
     # ---- FIXED SYSTEM PROMPT ----
     system_prompt = f"""
@@ -209,7 +225,7 @@ STRICT RULES for reply_draft formatting:
   - Use structured HTML paragraphs (<p>...</p>) and bullet points only where they improve clarity.
 - Always end emails with a warm closing in HTML:
   <p>Thanks & Regards,<br>Rahul<br>Team IMK<br>
-  <img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" /></p>
+  <img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnRfaWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" width="200" height="auto" style="display: block; margin: 0 auto;" /></p>
 - Always use this HTML format for hyperlinks: <a href="https://example.com">Click Here</a>.
 - Never merge multiple pieces of information into one block; enforce structure using HTML tags.
 - Fallback: If the query cannot be answered from the Knowledge Base, politely acknowledge and suggest contacting support for further help.
@@ -235,7 +251,7 @@ COURSE-RELATED TEMPLATE (HTML):
 </ul>
 <p>If you have further questions, feel free to ask.</p>
 <p>Thanks & Regards,<br>Rahul<br>Team IMK<br>
-<img src="KaXXvt7oI1zZcy9lII6Uko_ul1XCojrmug.png" alt="Team IMK Logo" /></p>
+<img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnR_aWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" width="200" height="auto" style="display: block; margin: 0 auto;" /></p>
 
 GENERAL QUERY TEMPLATE (HTML):
 <p>Hi {requester_name},</p>
@@ -243,7 +259,7 @@ GENERAL QUERY TEMPLATE (HTML):
 <p>[Insert professional AI reply here: use short, clear paragraphs and <ul><li> bullets where appropriate.]</p>
 <p>If you have further questions, feel free to ask.</p>
 <p>Thanks & Regards,<br>Rahul<br>Team IMK<br>
-<p><img src="KaXXvt7oI1zZcy9lII6Uko_ul1XCojrmug.png" alt="Team IMK Logo" /></p>
+<img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnR_aWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" width="200" height="auto" style="display: block; margin: 0 auto;" /></p>
 """
 
     user_prompt = f"Customer: {requester_name}\nSubject: {subject}\nBody: {description}\n\nKnowledge Base:\n{kb_content}\n\nReturn valid JSON only."
@@ -252,7 +268,7 @@ GENERAL QUERY TEMPLATE (HTML):
         ai_resp = call_openai(system_prompt, user_prompt)
         assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
         parsed = json.loads(assistant_text)
-    except Exception as e:
+    except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
         logging.exception("⚠️ OpenAI or JSON parse error: %s", e)
         parsed = {
             "intent": "UNKNOWN",
@@ -266,6 +282,7 @@ GENERAL QUERY TEMPLATE (HTML):
     intent = parsed.get("intent", "UNKNOWN").upper()
     confidence = parsed.get("confidence", 0.0)
     is_payment_issue = "PAYMENT" in intent or "BILLING" in intent or "REFUND" in intent
+
     # Handle payment issues: assign high priority and agent
     assignment_info = ""
     if is_payment_issue and PAYMENT_AGENT_ID > 0:
@@ -276,14 +293,10 @@ GENERAL QUERY TEMPLATE (HTML):
         if update_freshdesk_ticket(master_id, updates):
             assignment_info = f"<p><strong>Assigned to:</strong> {PAYMENT_AGENT_EMAIL} (ID: {PAYMENT_AGENT_ID})</p><p><strong>Priority:</strong> High</p>"
 
-    # Post private draft note with buttons
+    # Post private draft note with only the main reply draft (no intent/confidence/etc.), but keep buttons
     note_message = "<p>⚠️ Payment-related issue → private draft only. Handle manually.</p>" if is_payment_issue else "<p>Note: AI draft — please review, edit, and send manually during testing phase.</p>"
     note = f"""
 <h3>🤖 AI Assist Draft</h3>
-<p><strong>Intent:</strong> {intent}</p>
-<p><strong>Confidence:</strong> {confidence}</p>
-<p><strong>Summary:</strong> {parsed.get('summary')}</p>
-<p><strong>Sentiment:</strong> {parsed.get('sentiment')}</p>
 {assignment_info}
 <p><strong>Draft Reply:</strong></p>
 {parsed.get('reply_draft')}
