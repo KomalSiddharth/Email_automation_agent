@@ -279,7 +279,7 @@ GENERAL QUERY TEMPLATE (HTML):
             "kb_suggestions": []
         }
 
-    intent = parsed.get("intent", "UNKNOWN").upper()
+intent = parsed.get("intent", "UNKNOWN").upper()
     confidence = parsed.get("confidence", 0.0)
     is_payment_issue = "PAYMENT" in intent or "BILLING" in intent or "REFUND" in intent
 
@@ -293,12 +293,11 @@ GENERAL QUERY TEMPLATE (HTML):
         if update_freshdesk_ticket(master_id, updates):
             assignment_info = f"<p><strong>Assigned to:</strong> {PAYMENT_AGENT_EMAIL} (ID: {PAYMENT_AGENT_ID})</p><p><strong>Priority:</strong> High</p>"
 
-    # Post private draft note with only the draft message reply displayed, keep buttons
     # Build special AI_DRAFT private note (only for app to pickup)
-ai_draft_content = parsed.get("reply_draft", f"<p>Hi {requester_name},</p><p>Thank you for your inquiry. Our support team will get back to you soon.</p><p>Thanks & Regards,<br>Rahul<br>Team IMK</p>")
+    ai_draft_content = parsed.get("reply_draft", f"<p>Hi {requester_name},</p><p>Thank you for your inquiry. Our support team will get back to you soon.</p><p>Thanks & Regards,<br>Rahul<br>Team IMK</p>")
 
-# Special format: Start with #AI_DRAFT, then pure draft, then internal info
-note = f"""#AI_DRAFT
+    # Special format: Start with #AI_DRAFT, then pure draft, then internal info
+    note = f"""#AI_DRAFT
 
 {ai_draft_content}
 
@@ -323,8 +322,16 @@ note = f"""#AI_DRAFT
     except Exception as e:
         logging.exception("❌ Failed posting note: %s", e)
 
-    # No auto-reply sending during initial testing phase
-    auto_reply_ok = False
+    # Auto-reply if safe
+    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+    if auto_reply_ok:
+        try:
+            post_freshdesk_reply(master_id, ai_draft_content)
+            logging.info("✅ Auto-replied to ticket %s", master_id)
+        except Exception as e:
+            logging.exception("❌ Failed posting auto-reply: %s", e)
+    else:
+        logging.info("ℹ️ Auto-reply skipped (intent/setting)")
 
     return {
         "ok": True,
@@ -335,4 +342,3 @@ note = f"""#AI_DRAFT
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
-
