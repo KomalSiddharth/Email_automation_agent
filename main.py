@@ -262,6 +262,8 @@ GENERAL QUERY TEMPLATE (HTML):
 <img src="https://indattachment.freshdesk.com/inline/attachment?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MTA2MDAxNTMxMTAxOCwiZG9tYWluIjoibWl0ZXNoa2hhdHJpdHJhaW5pbmdsbHAuZnJlc2hkZXNrLmNvbSIsImFjY291bnR_aWQiOjMyMzYxMDh9.gswpN0f7FL4QfimJMQnCAKRj2APFqkOfYHafT0zB8J8" alt="Team IMK Logo" width="200" height="auto" style="display: block; margin: 0 auto;" /></p>
 """
 
+    user_prompt = f"Customer: {requester_name}\nSubject: {subject}\nBody: {description}\n\nKnowledge Base:\n{kb_content}\n\nReturn valid JSON only."
+
     try:
         ai_resp = call_openai(system_prompt, user_prompt)
         assistant_text = ai_resp["choices"][0]["message"]["content"].strip()
@@ -277,25 +279,25 @@ GENERAL QUERY TEMPLATE (HTML):
             "kb_suggestions": []
         }
 
-        intent = parsed.get("intent", "UNKNOWN").upper()
-        confidence = parsed.get("confidence", 0.0)
-        is_payment_issue = "PAYMENT" in intent or "BILLING" in intent or "REFUND" in intent
+    intent = parsed.get("intent", "UNKNOWN").upper()
+    confidence = parsed.get("confidence", 0.0)
+    is_payment_issue = "PAYMENT" in intent or "BILLING" in intent or "REFUND" in intent
 
-        # Handle payment issues: assign high priority and agent
-        assignment_info = ""
-        if is_payment_issue and PAYMENT_AGENT_ID > 0:
-            updates = {
-                "priority": 3,  # High priority in Freshdesk
-                "assignee_id": PAYMENT_AGENT_ID
-            }
-            if update_freshdesk_ticket(master_id, updates):
-                assignment_info = f"<p><strong>Assigned to:</strong> {PAYMENT_AGENT_EMAIL} (ID: {PAYMENT_AGENT_ID})</p><p><strong>Priority:</strong> High</p>"
+    # Handle payment issues: assign high priority and agent
+    assignment_info = ""
+    if is_payment_issue and PAYMENT_AGENT_ID > 0:
+        updates = {
+            "priority": 3,  # High priority in Freshdesk
+            "assignee_id": PAYMENT_AGENT_ID
+        }
+        if update_freshdesk_ticket(master_id, updates):
+            assignment_info = f"<p><strong>Assigned to:</strong> {PAYMENT_AGENT_EMAIL} (ID: {PAYMENT_AGENT_ID})</p><p><strong>Priority:</strong> High</p>"
 
-        # Build special AI_DRAFT private note (only for app to pickup)
-        ai_draft_content = parsed.get("reply_draft", f"<p>Hi {requester_name},</p><p>Thank you for your inquiry. Our support team will get back to you soon.</p><p>Thanks & Regards,<br>Rahul<br>Team IMK</p>")
+    # Build special AI_DRAFT private note (only for app to pickup)
+    ai_draft_content = parsed.get("reply_draft", f"<p>Hi {requester_name},</p><p>Thank you for your inquiry. Our support team will get back to you soon.</p><p>Thanks & Regards,<br>Rahul<br>Team IMK</p>")
 
-        # Special format: Start with #AI_DRAFT, then pure draft, then internal info
-        note = f"""#AI_DRAFT
+    # Special format: Start with #AI_DRAFT, then pure draft, then internal info
+    note = f"""#AI_DRAFT
 
 {ai_draft_content}
 
@@ -314,29 +316,29 @@ GENERAL QUERY TEMPLATE (HTML):
 </div>
 {"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
 """
+    try:
+        post_freshdesk_note(master_id, note, private=True)
+        logging.info("✅ Posted #AI_DRAFT private note to ticket %s", master_id)
+    except Exception as e:
+        logging.exception("❌ Failed posting note: %s", e)
+
+    # Auto-reply if safe
+    auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
+    if auto_reply_ok:
         try:
-            post_freshdesk_note(master_id, note, private=True)
-            logging.info("✅ Posted #AI_DRAFT private note to ticket %s", master_id)
+            post_freshdesk_reply(master_id, ai_draft_content)
+            logging.info("✅ Auto-replied to ticket %s", master_id)
         except Exception as e:
-            logging.exception("❌ Failed posting note: %s", e)
+            logging.exception("❌ Failed posting auto-reply: %s", e)
+    else:
+        logging.info("ℹ️ Auto-reply skipped (intent/setting)")
 
-        # Auto-reply if safe
-        auto_reply_ok = ENABLE_AUTO_REPLY and not is_payment_issue and intent in SAFE_INTENTS and confidence >= AUTO_REPLY_CONFIDENCE
-        if auto_reply_ok:
-            try:
-                post_freshdesk_reply(master_id, ai_draft_content)
-                logging.info("✅ Auto-replied to ticket %s", master_id)
-            except Exception as e:
-                logging.exception("❌ Failed posting auto-reply: %s", e)
-        else:
-            logging.info("ℹ️ Auto-reply skipped (intent/setting)")
-
-        return {
-            "ok": True,
-            "ticket": ticket_id,
-            "master_ticket": master_id,
-            "intent": intent,
-            "confidence": confidence,
-            "requester_email": requester_email,
-            "auto_reply": auto_reply_ok
-        }
+    return {
+        "ok": True,
+        "ticket": ticket_id,
+        "master_ticket": master_id,
+        "intent": intent,
+        "confidence": confidence,
+        "requester_email": requester_email,
+        "auto_reply": auto_reply_ok
+    }
