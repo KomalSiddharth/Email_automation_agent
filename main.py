@@ -310,10 +310,6 @@ GENERAL QUERY TEMPLATE (HTML):
 **KB Suggestions:**
 {json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
 
-<div style="margin-top: 20px;">
-<a href="https://{FRESHDESK_DOMAIN}/a/tickets/{master_id}" style="background-color: #2196F3; color: white; padding: 10px 20px; margin-right: 10px; text-decoration: none; border-radius: 5px;">Edit</a>
-<a href="https://{FRESHDESK_DOMAIN}/a/tickets/{master_id}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Share/Send</a>
-</div>
 {"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
 """
     try:
