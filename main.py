@@ -18,7 +18,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
-ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "true").lower() == "true"
+ENABLE_AUTO_REPLY = os.getenv("ENABLE_AUTO_REPLY", "false").lower() == "true"
 AUTO_REPLY_CONFIDENCE = float(os.getenv("AUTO_REPLY_CONFIDENCE", "0.95"))
 SAFE_INTENTS = [i.strip().upper() for i in os.getenv("AUTO_REPLY_INTENTS", "COURSE_INQUIRY,GENERAL").split(",")]
 TEST_EMAIL = "komalsiddharth814@gmail.com".lower()  # Only this email is processed
@@ -294,16 +294,32 @@ GENERAL QUERY TEMPLATE (HTML):
             assignment_info = f"<p><strong>Assigned to:</strong> {PAYMENT_AGENT_EMAIL} (ID: {PAYMENT_AGENT_ID})</p><p><strong>Priority:</strong> High</p>"
 
     # Post private draft note with only the draft message reply displayed, keep buttons
-    note = f"""
+    # Build special AI_DRAFT private note (only for app to pickup)
+ai_draft_content = parsed.get("reply_draft", f"<p>Hi {requester_name},</p><p>Thank you for your inquiry. Our support team will get back to you soon.</p><p>Thanks & Regards,<br>Rahul<br>Team IMK</p>")
+
+# Special format: Start with #AI_DRAFT, then pure draft, then internal info
+note = f"""#AI_DRAFT
+
+{ai_draft_content}
+
+[Internal: AI Intent - {intent}, Confidence - {confidence:.2f}, Sentiment - {parsed.get('sentiment', 'Neutral')}]
 {assignment_info}
-{parsed.get('reply_draft')}
+
+**Summary:**
+{parsed.get('summary', 'No summary available')}
+
+**KB Suggestions:**
+{json.dumps(parsed.get('kb_suggestions', []), ensure_ascii=False)}
+
 <div style="margin-top: 20px;">
 <a href="https://{FRESHDESK_DOMAIN}/a/tickets/{master_id}" style="background-color: #2196F3; color: white; padding: 10px 20px; margin-right: 10px; text-decoration: none; border-radius: 5px;">Edit</a>
 <a href="https://{FRESHDESK_DOMAIN}/a/tickets/{master_id}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Share/Send</a>
 </div>
+{"⚠️ Payment-related issue → private draft only." if is_payment_issue else "_Note: AI draft — please review before sending._"}
 """
     try:
         post_freshdesk_note(master_id, note, private=True)
+        logging.info("✅ Posted #AI_DRAFT private note to ticket %s", master_id)
     except Exception as e:
         logging.exception("❌ Failed posting note: %s", e)
 
@@ -319,3 +335,4 @@ GENERAL QUERY TEMPLATE (HTML):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
