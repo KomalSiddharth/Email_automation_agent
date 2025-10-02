@@ -3,6 +3,7 @@ import json
 import logging
 import requests
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from dotenv import load_dotenv
 import PyPDF2
 import pandas as pd
@@ -338,3 +339,75 @@ GENERAL QUERY TEMPLATE (HTML):
         "requester_email": requester_email,
         "auto_reply": auto_reply_ok
     }
+
+@app.get("/ticket-sidebar")
+async def ticket_sidebar(request: Request, ticket_id: int = None):
+    try:
+        if not ticket_id:
+            ticket_id = int(request.headers.get("X-FRESHDESK-TICKET-ID", 0))
+            if not ticket_id:
+                return {"error": "Ticket ID missing"}
+
+        full_ticket = get_freshdesk_ticket(ticket_id)
+        if not full_ticket:
+            return {"error": "Failed to fetch ticket"}
+
+        notes_url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes?include=requester"
+        headers = {"Authorization": f"Basic {FRESHDESK_API_KEY}"}
+        notes_resp = requests.get(notes_url, headers=headers, timeout=20)
+        notes_resp.raise_for_status()
+        notes = notes_resp.json().get("notes", [])
+
+        ai_draft_note = None
+        for note in notes:
+            if note.get("body", "").startswith("#AI_DRAFT"):
+                ai_draft_note = note
+                break
+
+        draft_text = ""
+        if ai_draft_note:
+            draft_text = ai_draft_note["body"].split("[Internal:")[0].replace("#AI_DRAFT\n", "").strip()
+
+        html_content = f"""
+        <html>
+        <head><title>AI Draft Assistant</title></head>
+        <body>
+          <script src="https://static.freshdev.io/fdk/2.0/assets/fresh_client.js"></script>
+          <script>
+            document.addEventListener('DOMContentLoaded', function () {{
+              app.initialized().then(function (client) {{
+                client.interface.trigger('setValue', {{ id: 'editor', value: `{draft_text}` }}).then(function () {{
+                  client.interface.trigger('showNotify', {{
+                    type: 'success',
+                    title: 'AI Draft Ready! 🎉',
+                    message: 'Hey, AI ne yeh draft banaya hai – edit kar lo aur send kar do!'
+                  }});
+                  client.events.on('ticket.replyClick', function () {{
+                    setTimeout(function () {{
+                      client.request.delete(`/api/v2/tickets/{ticket_id}/notes/{ai_draft_note['id']}`, {{
+                        headers: {{ Authorization: `Basic {FRESHDESK_API_KEY}` }}
+                      }}).then(function () {{
+                        console.log('✅ AI Draft note deleted');
+                        client.interface.trigger('showNotify', {{
+                          type: 'info',
+                          title: 'Cleanup Done!',
+                          message: 'AI Draft note deleted automatically.'
+                        }});
+                      }}).catch(function (error) {{
+                        console.error('Cleanup failed:', error);
+                      }});
+                    }}, 2000);
+                  }});
+                }}).catch(function (error) {{
+                  console.error('Error setting reply:', error);
+                }});
+              }});
+            }});
+          </script>
+        </body>
+        </html>
+        """
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logging.error("❌ Sidebar endpoint error: %s", e)
+        return {"error": str(e)}
