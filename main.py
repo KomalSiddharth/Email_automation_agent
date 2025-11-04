@@ -210,25 +210,25 @@ async def freshdesk_webhook(request: Request):
         logging.warning("⚠️ No KB content extracted; ensure files exist and are accessible.")
 from fastapi import Body
 
-@app.post("/generate-reply")
-async def generate_reply(request: Request, body: dict = Body(...)):
-    """
-    Generates an AI-based email reply for testing (without Freshdesk webhook)
-    """
-    try:
-        user_prompt = body.get("query") or ""
-        if not user_prompt:
-            return {"error": "Missing 'query' in request body"}
+# @app.post("/generate-reply")
+# async def generate_reply(request: Request, body: dict = Body(...)):
+#     """
+#     Generates an AI-based email reply for testing (without Freshdesk webhook)
+#     """
+#     try:
+#         user_prompt = body.get("query") or ""
+#         if not user_prompt:
+#             return {"error": "Missing 'query' in request body"}
 
-        system_prompt = "You are an AI email assistant for Team IMK. Write a professional HTML-formatted email reply."
+#         system_prompt = "You are an AI email assistant for Team IMK. Write a professional HTML-formatted email reply."
 
-        ai_response = call_openai(system_prompt, user_prompt)
-        reply_text = ai_response["choices"][0]["message"]["content"]
+#         ai_response = call_openai(system_prompt, user_prompt)
+#         reply_text = ai_response["choices"][0]["message"]["content"]
 
-        return {"ok": True, "reply": reply_text}
-    except Exception as e:
-        logging.exception("❌ Error in /generate-reply: %s", e)
-        return {"ok": False, "error": str(e)}
+#         return {"ok": True, "reply": reply_text}
+#     except Exception as e:
+#         logging.exception("❌ Error in /generate-reply: %s", e)
+#         return {"ok": False, "error": str(e)}
 
     # ---- FIXED SYSTEM PROMPT ----
     system_prompt = f"""
